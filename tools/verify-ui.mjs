@@ -190,6 +190,42 @@ try {
     return `基线=${info.baseline}，状态=${info.status}，版本行=[${info.tags.join(' ')}]`;
   });
 
+  await check('添加完成后按钮必须停止旋转并回到 +（回归：用户报过"叉叉一直转"）', async () => {
+    await cdp.waitFor(`!document.querySelector('#addBtn').disabled`, { timeout: 20000, label: '添加流程结束' });
+    await sleep(250);
+    const busy = await cdp.eval(`(() => { const s = document.querySelector('#addBtn svg'); return { spin: s.classList.contains('spin'), icon: s._iconName }; })()`);
+    assert(busy.spin === false, `按钮还在旋转：.spin 没被摘掉（icon=${busy.icon}）`);
+    await sleep(1700);   // 等结果图标（对勾/警告）自动回到 +
+    const after = await cdp.eval(`(() => { const s = document.querySelector('#addBtn svg'); return { spin: s.classList.contains('spin'), icon: s._iconName }; })()`);
+    assert(after.icon === 'plus', `图标没回到 plus，实际 ${after.icon}`);
+    assert(after.spin === false, '图标最终仍在旋转');
+    return `停转正常，图标 ${busy.icon} → ${after.icon}`;
+  });
+
+  await check('焦点环不会把胶囊按钮压成尖角矩形（回归：用户报过"尖锐的四边形"）', async () => {
+    const info = await cdp.eval(`(() => {
+      // 注意：getComputedStyle 返回的是活对象，必须"焦点落在谁身上就立刻取值"，
+      // 否则第二个元素一聚焦，第一个的值就读成失焦后的了（这里踩过）
+      const read = (el) => {
+        const cs = getComputedStyle(el);
+        return { radius: parseFloat(cs.borderTopLeftRadius), outline: cs.outlineStyle, w: cs.outlineWidth, transition: cs.transitionProperty };
+      };
+      const chip = document.querySelector('.chip[data-filter="all"]');
+      chip.focus({ focusVisible: true });     // 强制进入 :focus-visible
+      const chipInfo = read(chip);
+      const btn = document.querySelector('#checkAllBtn');
+      btn.focus({ focusVisible: true });
+      const btnInfo = read(btn);
+      document.activeElement.blur();
+      return { chip: chipInfo, btn: btnInfo };
+    })()`);
+    assert(info.chip.radius >= 100, `chip 圆角被焦点样式改小了：${info.chip.radius}px（应为 999）`);
+    assert(info.btn.radius >= 8, `按钮圆角异常：${info.btn.radius}px`);
+    assert(info.chip.outline !== 'none' && info.btn.outline !== 'none', `键盘焦点看不到焦点环：chip=${info.chip.outline} btn=${info.btn.outline}`);
+    assert(info.chip.transition.includes('box-shadow'), `chip 过渡属性缺少 box-shadow：${info.chip.transition}`);
+    return `chip 圆角 ${info.chip.radius}px / 按钮 ${info.btn.radius}px，焦点环 ${info.chip.w} ${info.chip.outline}`;
+  });
+
   await check('表单校验：空输入提交会内联报错并设 aria-invalid（不会静默失败）', async () => {
     await cdp.eval(`(() => { document.querySelector('#repoInput').value=''; document.querySelector('#addForm').requestSubmit(); return true; })()`);
     await sleep(200);

@@ -81,11 +81,12 @@ code, .mono { font-family: var(--font-mono); font-variant-ligatures: none; }
 svg { display: block; }
 [hidden] { display: none !important; }
 
-/* 焦点可见性：键盘导航必须看得见（技能清单第 1 条） */
+/* 焦点可见性：键盘导航必须看得见（技能清单第 1 条）
+   注意别在这里写 border-radius —— 它会把胶囊按钮的 999px 圆角覆盖成小圆角，
+   焦点环就变成一个"尖锐的四边形"框住圆按钮（用户报过这个）。outline 会自动跟随元素自身圆角。 */
 :focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
-  border-radius: calc(var(--radius) - 4px);
 }
 ::selection { background: var(--accent-soft); }
 
@@ -202,9 +203,11 @@ svg { display: block; }
   min-height: 32px; padding: .25rem .7rem; border: 0; border-radius: 999px;
   background: transparent; color: var(--muted-foreground);
   font-size: .8rem; font-weight: 500; cursor: pointer; white-space: nowrap; flex: none;
-  transition: background-color .18s ease, color .18s ease;
+  /* box-shadow 也要进 transition，否则选中态是"啪"地跳出来（用户说没有过渡动画） */
+  transition: background-color .22s ease, color .22s ease, box-shadow .22s ease, transform .12s ease;
 }
 .chip:hover { color: var(--foreground); }
+.chip:active { transform: scale(.96); }
 .chip[aria-pressed="true"] { background: var(--card); color: var(--foreground); box-shadow: var(--shadow); }
 .chip .count { font-family: var(--font-mono); font-size: .72rem; opacity: .8; }
 

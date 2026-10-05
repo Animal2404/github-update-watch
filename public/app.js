@@ -407,28 +407,29 @@ $('#addForm').addEventListener('submit', async (ev) => {
   }
   const svg = btn.querySelector('svg');
   btn.disabled = true;
-  setBusy(svg, true);
+  setBusy(svg, true);                    // loader-circle + 旋转
+  let ok = false;
   try {
     const res = await backend.add(value);
+    ok = true;
     input.value = '';
     input.removeAttribute('aria-invalid');
     hint.className = 'hint';
     hint.innerHTML = '支持完整链接、<code>owner/repo</code>、<code>git@github.com:owner/repo.git</code>；添加时会把当前最新版本记为基线。';
     toast(res.note || '已添加', res.repo?.error ? 'error' : 'success');
-    morph(svg, 'check');
     await refresh({ quiet: true });
-    setTimeout(() => morph(svg, 'plus'), 1400);
   } catch (e) {
     hint.className = 'hint is-error';
     hint.textContent = e.message;
     input.setAttribute('aria-invalid', 'true');
     input.focus();
     toast(e.message, 'error');
-    morph(svg, 'circle-alert');
-    setTimeout(() => morph(svg, 'plus'), 1600);
   } finally {
     btn.disabled = false;
-    if (!svg.classList.contains('spin')) setBusy(svg, false, 'plus');
+    // .spin 只有 setBusy 能摘掉。这里以前写成 `if (!classList.contains('spin'))`，
+    // 条件正好反了 —— 忙的时候不清理，于是图标永远转下去（用户看到的"叉叉一直旋转"）。
+    setBusy(svg, false, ok ? 'check' : 'circle-alert');
+    setTimeout(() => morph(svg, 'plus'), ok ? 1400 : 1800);
   }
 });
 
@@ -497,12 +498,20 @@ grid.addEventListener('click', async (ev) => {
     try {
       const { releases } = await backend.releases(id);
       if (!releases.length) { box.innerHTML = `<div class="release-item"><span class="name">这个仓库还没有发布任何 Release</span></div>`; return; }
-      box.innerHTML = releases.map((r) => `
+      // Release 的 name 经常就等于 tag（GitHub 自动生成），重复显示纯属噪音 —— 相同就不显示
+      const stripV = (s) => String(s || '').replace(/^v/i, '').toLowerCase();
+      box.innerHTML = releases.map((r) => {
+        const name = (r.name || '').trim();
+        const showName = name && stripV(name) !== stripV(r.tag);
+        return `
         <div class="release-item">
           <span class="tag ${r.tag === repo.latest?.tag ? 'tag-new' : ''}">${r.tag}</span>
-          <a class="name" href="${r.url}" target="_blank" rel="noreferrer noopener" title="${(r.name || '').replace(/"/g, '&quot;')}">${(r.name || '').slice(0, 42)}</a>
+          ${showName
+            ? `<a class="name" href="${r.url}" target="_blank" rel="noreferrer noopener" title="${name.replace(/"/g, '&quot;')}">${name.slice(0, 42)}</a>`
+            : `<span class="name"></span>`}
           <span class="date">${fmtDate(r.publishedAt)}</span>
-        </div>`).join('');
+        </div>`;
+      }).join('');
     } catch (e) {
       box.innerHTML = `<div class="release-item"><span class="name" style="color:var(--destructive)">加载失败：${e.message}</span></div>`;
     }
