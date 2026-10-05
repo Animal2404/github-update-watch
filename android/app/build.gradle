@@ -31,7 +31,10 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
-    // 仓库里不重复存一份网页代码：构建时把 ../public 同步进 assets/www
+    // 仓库里不重复存一份网页代码：构建前由 tools/sync-android-assets.mjs 把 ../public
+    // 同步进 src/main/assets/www（.gitignore 已忽略该目录）。
+    // 刻意不在 Gradle 里做这个拷贝：往 sourceSets 源码目录写文件会触发 Gradle 8.x 的
+    // 任务依赖校验，导致 lintVitalRelease 直接失败（踩过）。
     sourceSets {
         main {
             assets.srcDirs = ["$projectDir/src/main/assets"]
@@ -39,19 +42,18 @@ android {
     }
 }
 
-def webSrc = file("${rootDir}/../public")
-def webDst = file("${projectDir}/src/main/assets/www")
+def webAssets = file("${projectDir}/src/main/assets/www")
 
-tasks.register('syncWebAssets', Sync) {
-    from webSrc
-    into webDst
-    // vendor 目录里是本地化的 morphicons，一并带进去
-    doFirst { logger.lifecycle("同步网页资源: ${webSrc} -> ${webDst}") }
+// 提前失败并给出人话提示，而不是打出一个没有界面的 APK
+tasks.register('checkWebAssets') {
+    doFirst {
+        if (!file("${webAssets}/index.html").exists()) {
+            throw new GradleException("assets/www 是空的：先跑 `node tools/sync-android-assets.mjs` 再构建（CI 里由 workflow 负责）")
+        }
+    }
 }
 
-tasks.matching { it.name.startsWith('merge') && it.name.endsWith('Assets') }.configureEach {
-    dependsOn 'syncWebAssets'
-}
+tasks.named('preBuild') { dependsOn 'checkWebAssets' }
 
 dependencies {
     implementation 'androidx.webkit:webkit:1.11.0'

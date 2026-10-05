@@ -24,6 +24,13 @@ jobs:
       # 不调 android-actions/setup-android：它会去装已废弃的 'tools' 包然后失败
       # （实测 "Failed to find package 'tools'"）。ubuntu-latest 镜像自带 Android SDK
       # 且许可已接受，Gradle 通过 ANDROID_HOME 就能找到。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 同步网页资源进 APK
+        run: node tools/sync-android-assets.mjs
+
       - name: 确认 Android SDK
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
