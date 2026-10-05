@@ -27,6 +27,49 @@ node server.mjs          # 或 start.cmd 里那个 DSH 自带的 node
 > UTF-8 的中文会被从中间截断，命令直接乱掉（实测踩过）。所以启动器是全英文的，
 > 中文界面都在网页里。
 
+## 三端：网页 / Windows 桌面 / 安卓 APK
+
+三端**不是三份实现**，而是同一套代码的三种壳：
+
+```
+public/github-core.js   ← 版本比较、链接解析、GitHub 取数、基线状态机（两端共用这一份）
+        ├── server.mjs        Node 侧：curl 代理退让链 + 文件存储
+        │      ├── 网页/本机服务模式（浏览器走 /api/*）
+        │      └── electron/main.mjs   桌面壳：起同一个 server，包进原生窗口
+        └── public/app.js     直连模式：浏览器直接请求 api.github.com，数据存 localStorage
+               └── android/    APK：WebView + WebViewAssetLoader 加载同一份 public/
+```
+
+| | 网页 | Windows 桌面 | 安卓 APK |
+| --- | --- | --- | --- |
+| 界面 | `public/` | 同一份 `public/` | 同一份 `public/` |
+| 检测逻辑 | `github-core.js` | 同一份 | 同一份 |
+| 数据存哪 | `<仓库>/data/repos.json` | `%APPDATA%/GitHub Update Watch/` | WebView 的 localStorage |
+| 取数方式 | 本机服务（curl 退让链） | 同左（内嵌服务） | 浏览器直连 api.github.com |
+| Token | 同上，存在本地文件 | 同左 | 存在 App 的 localStorage |
+
+手机版没有服务端，所以用「直连模式」：GitHub 的 REST API 带 `Access-Control-Allow-Origin: *`，
+WebView 可以直接请求（已在 CI 里实测通过）；列表与基线存 localStorage，卸载才丢。
+
+## 云编译（不占本机，全部在 GitHub Actions 跑）
+
+仓库：**https://github.com/Animal2404/github-update-watch**（私有仓库；想省 CI 分钟数可改成公开）
+
+| 流水线 | 干什么 | 产出 |
+| --- | --- | --- |
+| `verify-web` | 起本机服务 → 无头 Chrome 真点每个按钮（22 项）+ 直连模式（7 项） | 截图与报告 artifact |
+| `build-android` | Gradle 编译 debug/release APK → **校验 APK 里确实打进了网页资源** → 起安卓模拟器装上、启动、截图、查崩溃 | `android-apk` artifact |
+| `build-desktop` | Windows 上 electron-builder 打包；另起 Linux job 用 xvfb 真跑一遍 Electron 壳 | `desktop-windows` artifact（安装包 + 免安装版） |
+
+下载产物：仓库页面 → Actions → 选一次成功的运行 → 页面底部 Artifacts；
+或命令行 `gh run download -n android-apk`。
+
+CI 里踩过并修掉的坑（都写在 workflow 注释里）：Node 需要 22+（全局 `WebSocket`）、
+`android-actions/setup-android` 会去装已废弃的 `tools` 包（镜像自带 SDK，别用）、
+Gradle 任务不能往 sourceSets 源码目录写（会触发任务依赖校验）、
+`android-emulator-runner` 的 `script` 是逐行执行的（多行 `if/fi` 会被拆断，逻辑要放进脚本文件）、
+CI 上 Electron 要加 `--no-sandbox`。
+
 ## 界面上的每个按钮
 
 | 位置 | 控件 | 行为 |
@@ -116,10 +159,11 @@ github-watch/
 
 - 只认 GitHub（不支持 GitLab/自建 Gitea）。
 - 版本比较按 semver；对不用 semver 的 tag（如纯日期 `2026.10.05`）只能做同类比较，可能漏判。
-- 需要 DSH 的 Node 或系统 Node ≥ 18（用了内置 `fetch` 与 `WebSocket`）。
+- 需要 DSH 的 Node 或系统 Node ≥ 18（服务端用了内置 `fetch`；验证脚本要 22+，因为用了全局 `WebSocket`）。
 - 服务只监听 `127.0.0.1`，不对外网开放。
-- 它是个**本地 Web 应用 + 独立窗口**（Chrome/Edge 的 `--app` 模式），不是 Electron 打包的 exe。
-  好处是零依赖、改代码即生效；要真正打包成 exe 得另上 Electron/Tauri。
+- 手机版与电脑版**功能一致但数据不互通**：APK 的数据在本机 localStorage 里，
+  没有做跨设备同步（要做的话得加个后端或走 GitHub Gist 之类）。
+- APK 用的是 debug 签名（方便直接装来体验）；要正式发布请换成自己的 keystore。
 
 ## 重新生成图标（一般不需要）
 
