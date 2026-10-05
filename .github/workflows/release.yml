@@ -102,6 +102,23 @@ jobs:
           path: dist/*.exe
           if-no-files-found: error
 
+      - name: 真机冒烟：把免安装 EXE 跑起来
+        shell: pwsh
+        timeout-minutes: 6
+        run: |
+          $exe = (Get-ChildItem dist -Filter '*Portable*.exe' | Select-Object -First 1).FullName
+          Write-Output "启动 $exe"
+          $env:GUW_SMOKE_OUT = Join-Path $PWD 'smoke-result.json'
+          if (Test-Path $env:GUW_SMOKE_OUT) { Remove-Item $env:GUW_SMOKE_OUT }
+          & $exe --smoke
+          Write-Output "退出码 = $LASTEXITCODE"
+          for ($i = 0; $i -lt 30 -and -not (Test-Path $env:GUW_SMOKE_OUT); $i++) { Start-Sleep -Seconds 2 }
+          if (-not (Test-Path $env:GUW_SMOKE_OUT)) { Write-Error "冒烟结果文件没生成，EXE 可能没跑起来"; exit 1 }
+          Get-Content $env:GUW_SMOKE_OUT
+          $r = Get-Content $env:GUW_SMOKE_OUT -Raw | ConvertFrom-Json
+          if (-not $r.ok) { Write-Error "EXE 冒烟失败: $($r.reason)"; exit 1 }
+          Write-Output "免安装 EXE 冒烟通过：backend=$($r.backend) cards=$($r.cards)"
+
   smoke:
     name: 安卓 release 包冒烟（发布前必过）
     needs: android

@@ -6,6 +6,7 @@
  * 打开外链。所以桌面版 / 网页版 / 安卓 APK 三端功能一致是结构决定的。
  */
 import { app, BrowserWindow, shell } from 'electron';
+import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -67,6 +68,12 @@ async function createWindow() {
       return { ok: false, reason: '界面 30 秒内没渲染完' };
     })()`);
     console.log('SMOKE_RESULT ' + JSON.stringify(result));
+    // Windows 上打包后的 exe 是 GUI 子系统程序，stdio 不挂到调用者的控制台，
+    // 所以冒烟结果同时写一份文件，让 CI 能读到（否则只能看退出码）。
+    const outFile = process.env.GUW_SMOKE_OUT;
+    if (outFile) {
+      try { writeFileSync(outFile, JSON.stringify(result), 'utf8'); } catch { /* 忽略 */ }
+    }
     app.exit(result?.ok ? 0 : 1);
   }
 }
