@@ -104,20 +104,34 @@ jobs:
 
       - name: 真机冒烟：把免安装 EXE 跑起来
         shell: pwsh
-        timeout-minutes: 6
+        timeout-minutes: 8
         run: |
           $exe = (Get-ChildItem dist -Filter '*Portable*.exe' | Select-Object -First 1).FullName
           Write-Output "启动 $exe"
           $env:GUW_SMOKE_OUT = Join-Path $PWD 'smoke-result.json'
           if (Test-Path $env:GUW_SMOKE_OUT) { Remove-Item $env:GUW_SMOKE_OUT }
+          # 免安装版是「解压后分离启动」，这条命令会立刻返回，所以要轮询结果文件
           & $exe --smoke
-          Write-Output "退出码 = $LASTEXITCODE"
-          for ($i = 0; $i -lt 30 -and -not (Test-Path $env:GUW_SMOKE_OUT); $i++) { Start-Sleep -Seconds 2 }
-          if (-not (Test-Path $env:GUW_SMOKE_OUT)) { Write-Error "冒烟结果文件没生成，EXE 可能没跑起来"; exit 1 }
-          Get-Content $env:GUW_SMOKE_OUT
-          $r = Get-Content $env:GUW_SMOKE_OUT -Raw | ConvertFrom-Json
-          if (-not $r.ok) { Write-Error "EXE 冒烟失败: $($r.reason)"; exit 1 }
-          Write-Output "免安装 EXE 冒烟通过：backend=$($r.backend) cards=$($r.cards)"
+          Write-Output "启动器返回码 = $LASTEXITCODE"
+          $deadline = (Get-Date).AddSeconds(180)
+          while ((Get-Date) -lt $deadline) {
+            if (Test-Path $env:GUW_SMOKE_OUT) {
+              $r = Get-Content $env:GUW_SMOKE_OUT -Raw | ConvertFrom-Json
+              if ($r.phase -eq 'starting' -or $r.phase -eq 'server-up') {
+                Write-Output "进度: $($r.phase)"
+                Start-Sleep -Seconds 5
+                continue
+              }
+              Write-Output "结果: $($r | ConvertTo-Json -Compress)"
+              if (-not $r.ok) { Write-Error "EXE 冒烟失败: $($r.reason)"; exit 1 }
+              Write-Output "免安装 EXE 冒烟通过：backend=$($r.backend) cards=$($r.cards)"
+              exit 0
+            }
+            Start-Sleep -Seconds 5
+          }
+          Write-Error "180 秒内没有结果文件：EXE 可能没启动（进程列表见上）"
+          Get-Process | Where-Object { $_.ProcessName -like '*GitHub*' -or $_.ProcessName -like '*electron*' } | Format-Table ProcessName, Id
+          exit 1
 
   smoke:
     name: 安卓 release 包冒烟（发布前必过）

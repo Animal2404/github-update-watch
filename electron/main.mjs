@@ -15,6 +15,11 @@ const DIR = path.dirname(fileURLToPath(import.meta.url));
 // --smoke：CI 里用的冒烟模式——起壳、加载界面、等首屏渲染完成，然后按结果退出。
 // 打包成功 ≠ 能跑起来，所以这一步在云端真的把窗口跑一遍（xvfb 无头）。
 const SMOKE = process.argv.includes('--smoke');
+/** 冒烟阶段埋点：GUI 程序拿不到 stdout，所以写文件让 CI 能区分「没启动」和「启动慢」 */
+function smokeMark(obj) {
+  if (!SMOKE || !process.env.GUW_SMOKE_OUT) return;
+  try { writeFileSync(process.env.GUW_SMOKE_OUT, JSON.stringify(obj), 'utf8'); } catch { /* 忽略 */ }
+}
 
 // 关键顺序：数据目录必须在 import server.mjs **之前**设好，
 // 因为 server.mjs 在模块加载时就会读它。
@@ -37,7 +42,9 @@ async function startServer() {
 }
 
 async function createWindow() {
+  smokeMark({ phase: 'starting' });
   const url = await startServer();
+  smokeMark({ phase: 'server-up', url });
   win = new BrowserWindow({
     width: 1240,
     height: 860,
@@ -68,12 +75,7 @@ async function createWindow() {
       return { ok: false, reason: '界面 30 秒内没渲染完' };
     })()`);
     console.log('SMOKE_RESULT ' + JSON.stringify(result));
-    // Windows 上打包后的 exe 是 GUI 子系统程序，stdio 不挂到调用者的控制台，
-    // 所以冒烟结果同时写一份文件，让 CI 能读到（否则只能看退出码）。
-    const outFile = process.env.GUW_SMOKE_OUT;
-    if (outFile) {
-      try { writeFileSync(outFile, JSON.stringify(result), 'utf8'); } catch { /* 忽略 */ }
-    }
+    smokeMark(result);
     app.exit(result?.ok ? 0 : 1);
   }
 }
