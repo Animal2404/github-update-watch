@@ -73,6 +73,18 @@ jobs:
         with:
           node-version: '22'
 
+      - name: 检查 package.json 没有 BOM
+        shell: pwsh
+        run: |
+          # 踩过：用 PowerShell 的 Set-Content 改版本号会写入 BOM，
+          # electron-builder 直接 "readObjectStart: expect { or n, but found ?" 挂掉。
+          $bytes = [System.IO.File]::ReadAllBytes("$PWD\package.json")
+          if ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+            Write-Error 'package.json 带 UTF-8 BOM，electron-builder 读不了'
+            exit 1
+          }
+          Write-Output 'package.json 无 BOM'
+
       - name: 安装构建依赖
         run: npm install --no-audit --no-fund
 
