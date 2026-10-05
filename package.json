@@ -1,7 +1,7 @@
-{
+﻿{
   "name": "github-update-watch",
   "productName": "GitHub Update Watch",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "自定义 GitHub 项目列表，检测是否有新版本发布",
   "type": "module",
