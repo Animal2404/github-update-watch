@@ -35,3 +35,25 @@ jobs:
           path: |
             dist/*.exe
           if-no-files-found: error
+
+  smoke-linux:
+    name: Electron 冒烟（云端把壳跑起来）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 安装构建依赖
+        run: npm install --no-audit --no-fund
+
+      - name: Electron 运行所需图形库
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb libgtk-3-0 libnss3 libgbm1 libxss1 \
+            || sudo apt-get install -y --no-install-recommends xvfb libgtk-3-0 libnss3 libasound2 libgbm1 libxss1
+
+      - name: 起壳并等界面渲染（无头）
+        run: xvfb-run -a npx electron . --smoke

@@ -11,6 +11,10 @@ import { fileURLToPath } from 'node:url';
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 
+// --smoke：CI 里用的冒烟模式——起壳、加载界面、等首屏渲染完成，然后按结果退出。
+// 打包成功 ≠ 能跑起来，所以这一步在云端真的把窗口跑一遍（xvfb 无头）。
+const SMOKE = process.argv.includes('--smoke');
+
 // 关键顺序：数据目录必须在 import server.mjs **之前**设好，
 // 因为 server.mjs 在模块加载时就会读它。
 process.env.GUW_DATA_DIR = app.getPath('userData');
@@ -43,13 +47,28 @@ async function createWindow() {
     title: 'GitHub 更新监测',
     webPreferences: { contextIsolation: true, nodeIntegration: false, spellcheck: false },
   });
-  win.once('ready-to-show', () => win.show());
+  win.once('ready-to-show', () => { if (!SMOKE) win.show(); });
   // 卡片上的外链（仓库主页 / Release 页）交给系统默认浏览器，不在窗口里开
   win.webContents.setWindowOpenHandler(({ url: target }) => {
     shell.openExternal(target);
     return { action: 'deny' };
   });
   await win.loadURL(url);
+
+  if (SMOKE) {
+    const result = await win.webContents.executeJavaScript(`(async () => {
+      for (let i = 0; i < 60; i++) {
+        const grid = document.querySelector('#grid');
+        if (grid && grid.getAttribute('aria-busy') === 'false') {
+          return { ok: true, backend: window.__guw.state.backend, cards: document.querySelectorAll('.repo-card').length, title: document.title };
+        }
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      return { ok: false, reason: '界面 30 秒内没渲染完' };
+    })()`);
+    console.log('SMOKE_RESULT ' + JSON.stringify(result));
+    app.exit(result?.ok ? 0 : 1);
+  }
 }
 
 app.setAppUserModelId('com.guw.watch');
