@@ -103,6 +103,30 @@ jobs:
           path: dist/*.exe
           if-no-files-found: error
 
+      - name: 免安装版冒烟（真跑一遍 Portable exe）
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem dist -Filter '*Portable*.exe' | Select-Object -First 1).FullName
+          Write-Output "启动 $exe"
+          $env:GUW_SMOKE_OUT = "$PWD\smoke-portable.json"
+          if (Test-Path $env:GUW_SMOKE_OUT) { Remove-Item $env:GUW_SMOKE_OUT }
+          # 便携版是「自解压 + 分离启动」，这条命令会立刻返回，所以要轮询结果文件
+          & $exe --smoke
+          Write-Output "启动器返回码 = $LASTEXITCODE"
+          $deadline = (Get-Date).AddSeconds(180)
+          while ((Get-Date) -lt $deadline) {
+            if (Test-Path $env:GUW_SMOKE_OUT) {
+              $raw = Get-Content $env:GUW_SMOKE_OUT -Raw
+              Write-Output "结果: $raw"
+              if ($raw -match '"phase"') { Start-Sleep -Seconds 5; continue }
+              if ($raw -match '"ok":true') { Write-Output '免安装版冒烟通过'; exit 0 }
+              Write-Error "免安装版冒烟失败: $raw"; exit 1
+            }
+            Start-Sleep -Seconds 5
+          }
+          Write-Error '180 秒内没有结果文件：便携版启动器没能把程序拉起来'
+          exit 1
+
       - name: 诊断：直接跑未打包的 exe 并捕获输出
         shell: pwsh
         continue-on-error: true
