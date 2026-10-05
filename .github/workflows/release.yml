@@ -1,0 +1,156 @@
+name: release
+
+# 打一个 v* 标签就自动：云端编译 Windows 安装包 / 免安装版 / 安卓 APK，
+# 然后把三个文件挂到这个 tag 的 GitHub Release 上。
+# 这样别人（和未来的你）直接从 Releases 页面就能下载，不用去翻 Actions artifacts。
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag（例如 v1.0.0，必须先存在）'
+        required: true
+
+permissions:
+  contents: write   # 创建 Release 需要写权限
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  android:
+    name: 云端编译 APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 同步网页资源进 APK
+        run: node tools/sync-android-assets.mjs
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: 编译 release APK
+        working-directory: android
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: 校验 APK 内容并改名
+        run: |
+          set -e
+          VERSION="${RELEASE_TAG#v}"
+          APK=$(find android/app/build/outputs/apk/release -name '*.apk' | head -1)
+          unzip -l "$APK" | grep -q 'assets/www/index.html'
+          unzip -l "$APK" | grep -q 'assets/www/github-core.js'
+          mkdir -p out
+          cp "$APK" "out/GitHubUpdateWatch-${VERSION}.apk"
+          ls -lh out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: out/*.apk
+          if-no-files-found: error
+
+  desktop:
+    name: 云端打包 Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 安装构建依赖
+        run: npm install --no-audit --no-fund
+
+      - name: 打包（安装包 + 免安装版）
+        run: npm run dist
+
+      - name: 列出产物
+        shell: pwsh
+        run: Get-ChildItem dist -Filter *.exe | Format-Table Name, @{N='MB';E={[math]::Round($_.Length/1MB,1)}}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-exe
+          path: dist/*.exe
+          if-no-files-found: error
+
+  publish:
+    name: 挂到 Release
+    needs: [android, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: files
+
+      - name: 整理文件名
+        run: |
+          set -e
+          mkdir -p out
+          find files -type f \( -name '*.apk' -o -name '*.exe' \) -exec cp {} out/ \;
+          ls -lh out/
+
+      - name: 写 Release 说明
+        run: |
+          cat > notes.md <<'EOF'
+          ## 下载
+
+          | 平台 | 文件 | 说明 |
+          | --- | --- | --- |
+          | Windows | `GitHubUpdateWatch-Setup-*.exe` | 安装版（可选安装目录） |
+          | Windows | `GitHubUpdateWatch-Portable-*.exe` | 免安装，双击即用 |
+          | Android | `GitHubUpdateWatch-*.apk` | 手机版（需允许"安装未知来源应用"） |
+
+          ## 功能
+
+          自定义 GitHub 项目列表，记下每个项目当前最新版本作为基线，之后每次检查告诉你**有没有发新版本**。
+
+          - 添加项目支持完整链接 / `owner/repo` / `git@github.com:owner/repo.git`
+          - 单独检查或全部检查（并发 3、带进度）、版本历史（最近 10 个 Release）
+          - 「标记已读」把当前最新版记为基线；无更新时自动禁用并说明原因
+          - 搜索、按状态过滤（全部/有更新/无更新/有问题）、深色/浅色主题（图标带 morph 变形）
+          - 发现新版本时弹系统通知（桌面走 Web Notification，安卓走原生通知）
+          - 可填 GitHub Token 把额度从 60 次/小时提到 5000 次/小时
+
+          ## 三端同一份代码
+
+          界面与检测逻辑来自同一个 `public/github-core.js`：桌面版起本地服务，安卓版用 WebView 直连
+          `api.github.com`（数据存本机 localStorage）。所以手机和电脑的功能是一致的。
+
+          > 构建信息：本页文件全部由 GitHub Actions 云端编译（见 `.github/workflows/release.yml`），
+          > 安卓包为 debug 签名，仅供自用体验；正式分发请替换成自己的 keystore。
+          EOF
+          cat notes.md
+
+      - name: 创建 Release 并上传三个文件
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG 已存在，改为上传/覆盖附件"
+            gh release upload "$RELEASE_TAG" out/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$RELEASE_TAG" out/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "GitHub 更新监测 $RELEASE_TAG" \
+              --notes-file notes.md
+          fi
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"
