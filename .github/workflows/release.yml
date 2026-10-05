@@ -85,6 +85,9 @@ jobs:
           }
           Write-Output 'package.json 无 BOM'
 
+      - name: 检查版本号一致（package.json ↔ public/version.js）
+        run: node tools/bump-version.mjs --check
+
       - name: 安装构建依赖
         run: npm install --no-audit --no-fund
 
@@ -137,6 +140,38 @@ jobs:
             Start-Sleep -Seconds 5
           }
           Write-Error '180 秒内没有结果文件：便携版启动器没能把程序拉起来'
+          exit 1
+
+      - name: 安装版冒烟（静默安装 → 跑装好的那个 exe）
+        shell: pwsh
+        timeout-minutes: 12
+        run: |
+          $setup = (Get-ChildItem dist -Filter '*Setup*.exe' | Select-Object -First 1).FullName
+          Write-Output "静默安装 $setup"
+          Start-Process -FilePath $setup -ArgumentList '/S' -Wait
+          Start-Sleep -Seconds 20
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter 'github-update-watch.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) {
+            Write-Error '静默安装后没找到 github-update-watch.exe'
+            Get-ChildItem "$env:LOCALAPPDATA\Programs" -ErrorAction SilentlyContinue | Format-Table Name
+            exit 1
+          }
+          Write-Output "装好了：$($exe.FullName)"
+          $env:GUW_SMOKE_OUT = "$PWD\smoke-installed.json"
+          if (Test-Path $env:GUW_SMOKE_OUT) { Remove-Item $env:GUW_SMOKE_OUT }
+          & $exe.FullName --smoke
+          $deadline = (Get-Date).AddSeconds(180)
+          while ((Get-Date) -lt $deadline) {
+            if (Test-Path $env:GUW_SMOKE_OUT) {
+              $raw = Get-Content $env:GUW_SMOKE_OUT -Raw
+              Write-Output "结果: $raw"
+              if ($raw -match '"phase"') { Start-Sleep -Seconds 5; continue }
+              if ($raw -match '"ok":true') { Write-Output '安装版冒烟通过（装完能起来、界面能渲染）'; exit 0 }
+              Write-Error "安装版冒烟失败: $raw"; exit 1
+            }
+            Start-Sleep -Seconds 5
+          }
+          Write-Error '180 秒内安装版没有写出结果文件'
           exit 1
 
       - name: 诊断：直接跑未打包的 exe 并捕获输出

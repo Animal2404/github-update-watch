@@ -575,6 +575,8 @@ $('#settingsBtn').addEventListener('click', () => {
   toggle.checked = notifyEnabled();
   toggle.disabled = !notifySupported();
   toggle.closest('.switch-row').title = notifySupported() ? '' : '当前环境不支持系统通知';
+  // 版本号：出问题时先问"你装的是哪个版本"，比让人翻文件属性靠谱
+  $('#verText').textContent = window.__GUW_VERSION || '未知';
   settingsDialog.showModal();
 });
 

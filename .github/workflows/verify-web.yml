@@ -22,6 +22,9 @@ jobs:
           # 必须是 22+：验证脚本用全局 WebSocket 连 CDP，Node 20 没有这个全局对象
           node-version: '22'
 
+      - name: 校验版本号一致（package.json ↔ public/version.js）
+        run: node tools/bump-version.mjs --check
+
       - name: 启动本地服务
         run: |
           node server.mjs > server.log 2>&1 &
@@ -31,10 +34,10 @@ jobs:
           done
           cat server.log
 
-      - name: 逐按钮验证（本机服务模式，22 项断言）
+      - name: 逐按钮验证（本机服务模式，24 项断言）
         run: node tools/verify-ui.mjs http://127.0.0.1:7321/
 
-      - name: 逐按钮验证（直连模式 = APK 走的路径，7 项断言）
+      - name: 逐按钮验证（直连模式 = APK 走的路径，9 项断言）
         run: node tools/verify-direct.mjs
 
       - name: 上传截图与报告

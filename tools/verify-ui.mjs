@@ -389,6 +389,9 @@ try {
     assert(opened === true, '对话框没打开');
     const hint = await cdp.eval(`document.querySelector('#rateHint').textContent`);
     assert(hint.length > 4, '额度提示为空');
+    // 对话框里必须能看到版本号：出问题时用户能直接报版本，比翻文件属性靠谱
+    const ver = await cdp.eval(`document.querySelector('#verText').textContent`);
+    assert(/^\d+\.\d+\.\d+/.test(ver), `对话框没显示版本号，实际「${ver}」`);
     const f = await cdp.shot('04-settings-dialog'); shotFiles.push(f);
     await cdp.eval(`document.querySelector('#settingsCloseBtn').click()`);
     await sleep(200);
@@ -398,7 +401,7 @@ try {
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     await sleep(260);
     assert((await cdp.eval(`document.querySelector('#settingsDialog').open`)) === false, 'Esc 不能关闭');
-    return `打开/关闭/Esc 均正常（截图 ${path.basename(f)}）`;
+    return `打开/关闭/Esc 均正常，版本号显示 ${ver}（截图 ${path.basename(f)}）`;
   });
 
   // ---------- 6. 删除 ----------

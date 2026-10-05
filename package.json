@@ -1,7 +1,7 @@
 {
   "name": "github-update-watch",
   "productName": "GitHub Update Watch",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "description": "自定义 GitHub 项目列表，检测是否有新版本发布",
   "author": "Animal2404",
@@ -37,14 +37,26 @@
     "win": {
       "icon": "build/icon.ico",
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "portable", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "linux": {
       "icon": "build/icon.png",
-      "target": ["AppImage"],
+      "target": [
+        "AppImage"
+      ],
       "category": "Utility"
     },
     "nsis": {
