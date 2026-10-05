@@ -74,6 +74,25 @@ Gradle 任务不能往 sourceSets 源码目录写（会触发任务依赖校验�
 `android-emulator-runner` 的 `script` 是逐行执行的（多行 `if/fi` 会被拆断，逻辑要放进脚本文件）、
 CI 上 Electron 要加 `--no-sandbox`。
 
+**打包后 EXE 一启动就死**（最贵的一个坑，值得单独说）：
+
+```js
+await import(path.join(DIR, '..', 'server.mjs'))   // ❌ Windows 上传入 "C:\...\server.mjs"
+```
+
+Node 的 ESM 加载器把这个字符串当成 URL，读到协议 `c:` 直接抛
+`ERR_UNSUPPORTED_ESM_URL_SCHEME`；而打包后的 Electron 是 GUI 子系统程序，**没有 stderr**，
+进程秒退、事件日志里也没有任何记录，表现就是"双击没反应"。Linux 上路径以 `/` 开头恰好能跑，
+所以"云端跑 Linux 冒烟绿了、Windows 用户拿到的 exe 是坏的"。修法两条一起上：
+
+1. `await import(pathToFileURL(绝对路径).href)`；
+2. `electron-builder` 里 `"asar": false` —— Node 的 ESM 加载器同样不认 asar 归档里的模块。
+
+现在发布流水线里有两道真跑验证：Linux job 跑**打包后的可执行文件**（xvfb），
+Windows job 跑**免安装版 exe**；任一不过就 `needs` 拦住发布，Release 不会出现坏包。
+CI 里 Windows 上没法直接跑 `win-unpacked` 之外的东西时，还可以用诊断 artifact 里的
+`smoke-win.json` 看它到底走到哪一步。
+
 ## 界面上的每个按钮
 
 | 位置 | 控件 | 行为 |
