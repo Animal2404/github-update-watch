@@ -57,7 +57,10 @@ WebView 可以直接请求（已在 CI 里实测通过）；列表与基线存 l
 
 ## 云编译（不占本机，全部在 GitHub Actions 跑）
 
-仓库：**https://github.com/Animal2404/github-update-watch**（私有仓库；想省 CI 分钟数可改成公开）
+仓库：**https://github.com/Animal2404/github-update-watch**（公开仓库，CI 分钟数不限）
+
+**下载安装包**不用进 Actions，直接在 Releases 页面拿：
+<https://github.com/Animal2404/github-update-watch/releases/latest>
 
 | 流水线 | 干什么 | 产出 |
 | --- | --- | --- |
