@@ -78,6 +78,31 @@ const directBackend = (() => {
 
 let backend = httpBackend;   // 启动时探测后确定
 
+// ---------------------------------------------------------------- 系统通知
+// 三端要一致：网页/桌面用 Web Notification；安卓 WebView 不支持 Web 通知，
+// 由 MainActivity 注入的 AndroidNotify 桥走原生通知。开关存在 localStorage（每台设备各自决定）。
+const NOTIFY_KEY = 'guw-notify';
+const notifyEnabled = () => localStorage.getItem(NOTIFY_KEY) !== 'off';
+const notifySupported = () => !!(window.AndroidNotify || typeof Notification !== 'undefined');
+
+function setNotifyPref(on) {
+  localStorage.setItem(NOTIFY_KEY, on ? 'on' : 'off');
+  if (on && !window.AndroidNotify && typeof Notification !== 'undefined' && Notification.permission === 'default') {
+    Notification.requestPermission().catch(() => {});
+  }
+}
+/** 检查完发现新版本时弹通知；返回是否真的弹出去了（测试要断言这个） */
+function notifyUpdates(updates) {
+  if (!notifyEnabled() || !updates.length) return false;
+  const title = `GitHub 更新监测：${updates.length} 个项目有新版本`;
+  const body = updates.slice(0, 4).map((r) => `${r.canonical || r.id} → ${r.latest?.tag}`).join('\n');
+  if (window.AndroidNotify) {
+    try { window.AndroidNotify.notify(title, body); return true; } catch { return false; }
+  }
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return false;
+  try { new Notification(title, { body, tag: 'guw-updates' }); return true; } catch { return false; }
+}
+
 // ---------------------------------------------------------------- 图标
 const REDUCED = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -421,8 +446,9 @@ $('#checkAllBtn').addEventListener('click', async () => {
         await refresh({ quiet: true });
         if (!state.job?.running) {
           stopPolling();
-          const updates = state.repos.filter((r) => statusOf(r) === 'update').length;
-          toast(state.job?.failed ? `检查完成，${state.job.failed} 个失败` : `检查完成：${updates} 个有新版本`, state.job?.failed ? 'error' : updates ? 'success' : 'info');
+          const updates = state.repos.filter((r) => statusOf(r) === 'update');
+          const notified = notifyUpdates(updates);
+          toast(state.job?.failed ? `检查完成，${state.job.failed} 个失败` : `检查完成：${updates.length} 个有新版本${notified ? '（已发系统通知）' : ''}`, state.job?.failed ? 'error' : updates.length ? 'success' : 'info');
         }
       } catch { stopPolling(); }
     }, 700);
@@ -536,7 +562,16 @@ $('#settingsBtn').addEventListener('click', () => {
   $('#rateHint').textContent = (state.rate
     ? `当前额度：${state.rate.remaining}/${state.rate.limit}（${state.hasToken ? '已用 Token' : '未认证，60 次/小时'}）`
     : '拿不到额度信息，可能是网络问题。') + ` · 模式：${backend.label}${state.transport ? `（${state.transport}）` : ''}`;
+  const toggle = $('#notifyToggle');
+  toggle.checked = notifyEnabled();
+  toggle.disabled = !notifySupported();
+  toggle.closest('.switch-row').title = notifySupported() ? '' : '当前环境不支持系统通知';
   settingsDialog.showModal();
+});
+
+$('#notifyToggle').addEventListener('change', (ev) => {
+  setNotifyPref(ev.target.checked);
+  toast(ev.target.checked ? '已开启：发现新版本时弹系统通知' : '已关闭系统通知', 'info');
 });
 $('#settingsCloseBtn').addEventListener('click', () => settingsDialog.close());
 $('#tokenSaveBtn').addEventListener('click', async () => {

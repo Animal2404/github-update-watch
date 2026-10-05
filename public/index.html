@@ -115,6 +115,10 @@
       <p class="hint" id="tokenHint">不填也能用，但未认证限流只有 60 次/小时；填了可提升到 5000 次/小时。Token 只保存在本机 <code>data/repos.json</code>，不会外发。</p>
     </div>
     <p class="hint" id="rateHint"></p>
+    <label class="switch-row">
+      <input type="checkbox" id="notifyToggle">
+      <span>检查完发现新版本时弹系统通知</span>
+    </label>
     <div class="dialog-actions">
       <button class="btn btn-ghost" id="tokenClearBtn" type="button">清除 Token</button>
       <button class="btn btn-outline" id="settingsCloseBtn" type="button">关闭</button>

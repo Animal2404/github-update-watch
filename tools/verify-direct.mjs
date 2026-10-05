@@ -85,10 +85,13 @@ try {
   const shot = async (name) => { const r = await send('Page.captureScreenshot', { format: 'png' }); const f = path.join(OUT, `${name}.png`); fs.writeFileSync(f, Buffer.from(r.data, 'base64')); return f; };
   await send('Page.enable'); await send('Runtime.enable');
 
+  // CDP 连上时页面可能还停在 about:blank，那时访问 localStorage 会 SecurityError（踩过两次）
+  await waitFor(`location.origin === 'http://127.0.0.1:${PORT}'`, { timeout: 30000, label: '页面导航到应用' });
+
   // 干净起点
   await evaluate(`localStorage.clear()`);
   await evaluate(`location.reload()`);
-  await sleep(1500);
+  await sleep(1200);
 
   await check('无服务端时自动降级为「直连模式」', async () => {
     // 注意：window.__guw 在模块加载时就存在，但 boot 还没跑完——
@@ -135,6 +138,59 @@ try {
     const after = await evaluate(`(() => { const x = window.__guw.state.repos.find(r => r.id === 'microsoft/typescript'); return { status: x.status, baseline: x.baseline, latest: x.latest.tag }; })()`);
     assert(after.status === 'clean' && after.baseline === after.latest, JSON.stringify(after));
     return `update → 已读 → clean（基线推进到 ${after.baseline}）`;
+  });
+
+  await check('系统通知：「全部检查」发现新版本时真的触发通知（stub 记录调用）', async () => {
+    // 再造一次"有新版本"的状态
+    await evaluate(`(() => {
+      const k = 'guw-store-v1';
+      const s = JSON.parse(localStorage.getItem(k));
+      s.repos[0].baseline = 'v1.0.0';
+      localStorage.setItem(k, JSON.stringify(s));
+      // 记录通知调用（安卓端是 AndroidNotify 原生桥，这里验的是同一条 notifyUpdates 分支）
+      window.__notifications = [];
+      window.Notification = class {
+        static permission = 'granted';
+        static requestPermission() { return Promise.resolve('granted'); }
+        constructor(title, opts) { window.__notifications.push({ title, body: opts && opts.body }); }
+      };
+      location.reload();
+      return true;
+    })()`);
+    await waitFor(`document.querySelector('#grid')?.getAttribute('aria-busy') === 'false'`, { label: '重新加载' });
+    // reload 会清掉 stub，重新装一次
+    await evaluate(`(() => {
+      window.__notifications = [];
+      window.Notification = class {
+        static permission = 'granted';
+        static requestPermission() { return Promise.resolve('granted'); }
+        constructor(title, opts) { window.__notifications.push({ title, body: opts && opts.body }); }
+      };
+      return true;
+    })()`);
+    await evaluate(`document.querySelector('#checkAllBtn').click()`);
+    await waitFor(`window.__notifications.length > 0`, { timeout: 40000, label: '通知被触发' });
+    const got = await evaluate(`window.__notifications[0]`);
+    assert(/新版本/.test(got.title), `通知标题不对：${got.title}`);
+    assert(/→/.test(got.body || ''), `通知正文没带版本变化：${got.body}`);
+    return `${got.title} ｜ ${(got.body || '').split('\n')[0]}`;
+  });
+
+  await check('设置对话框：通知开关可切换且能持久化', async () => {
+    await evaluate(`document.querySelector('#settingsBtn').click()`);
+    await sleep(300);
+    const before = await evaluate(`document.querySelector('#notifyToggle').checked`);
+    await evaluate(`(() => { const t = document.querySelector('#notifyToggle'); t.checked = !t.checked; t.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+    await sleep(200);
+    const stored = await evaluate(`localStorage.getItem('guw-notify')`);
+    const after = await evaluate(`document.querySelector('#notifyToggle').checked`);
+    assert(before === true, `默认应当是开启，实际 ${before}`);
+    assert(stored === 'off' && after === false, `切换后没存住：stored=${stored} checked=${after}`);
+    // 还原
+    await evaluate(`(() => { const t = document.querySelector('#notifyToggle'); t.checked = true; t.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+    await sleep(150);
+    await evaluate(`document.querySelector('#settingsCloseBtn').click()`);
+    return `默认开 → 关（localStorage=${stored}）→ 已还原`;
   });
 
   await check('数据持久化：刷新页面后列表与基线仍在（localStorage）', async () => {

@@ -22,4 +22,7 @@ export function findChrome() {
   return candidates.find((p) => { try { return fs.existsSync(p); } catch { return false; } }) || null;
 }
 
-export const HEADLESS_ARGS = ['--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--hide-scrollbars'];
+// --no-proxy-server：本机设了系统代理时，浏览器会走代理出去，而未认证的 GitHub 额度
+// 是按**出口 IP** 算的——共享代理节点的额度经常已被用光，表现为"明明 curl 直连还有额度，
+// 页面却报限流"。测试要的是确定性和与应用一致的行为，所以让测试浏览器直连。
+export const HEADLESS_ARGS = ['--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--hide-scrollbars', '--no-proxy-server'];

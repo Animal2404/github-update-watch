@@ -329,6 +329,8 @@ dialog::backdrop { background: rgba(2, 6, 23, .62); backdrop-filter: blur(3px); 
   .chip { padding: .2rem .5rem; font-size: .74rem; gap: .25rem; }
   .chip .count { font-size: .68rem; }
 }
+.switch-row { display: flex; align-items: center; gap: .55rem; font-size: .86rem; cursor: pointer; }
+.switch-row input { width: 18px; height: 18px; accent-color: var(--primary); cursor: pointer; flex: none; }
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
