@@ -103,6 +103,32 @@ jobs:
           path: dist/*.exe
           if-no-files-found: error
 
+      - name: 诊断：直接跑未打包的 exe 并捕获输出
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $exe = 'dist\win-unpacked\github-update-watch.exe'
+          if (-not (Test-Path $exe)) { Write-Output "没有 $exe，跳过"; exit 0 }
+          $env:GUW_SMOKE_OUT = "$PWD\smoke-win.json"
+          if (Test-Path $env:GUW_SMOKE_OUT) { Remove-Item $env:GUW_SMOKE_OUT }
+          Write-Output "运行 $exe --smoke"
+          & $exe --smoke *> win-run.log
+          Write-Output "退出码 = $LASTEXITCODE"
+          Write-Output '--- stdout/stderr ---'
+          if (Test-Path win-run.log) { Get-Content win-run.log -Tail 80 }
+          Write-Output '--- smoke 结果文件 ---'
+          if (Test-Path $env:GUW_SMOKE_OUT) { Get-Content $env:GUW_SMOKE_OUT } else { Write-Output '(没有生成)' }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: win-unpacked-diagnostic
+          path: |
+            win-run.log
+            smoke-win.json
+            dist/win-unpacked/resources/app/**
+          if-no-files-found: warn
+
   smoke-packaged:
     name: 打包产物冒烟（Linux + xvfb，真跑一遍）
     needs: desktop
