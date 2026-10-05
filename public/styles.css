@@ -194,12 +194,14 @@ svg { display: block; }
 
 /* ---------------------------------------------------------------- 工具栏 / 过滤器 */
 .toolbar-row { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-top: .9rem; }
-.filters { display: flex; gap: .3rem; background: var(--muted); padding: .25rem; border-radius: 999px; }
+/* 窄屏（手机）上四个 chip 会挤成两行 —— 让它横向滚动而不是换行压缩文字 */
+.filters { display: flex; gap: .3rem; background: var(--muted); padding: .25rem; border-radius: 999px; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.filters::-webkit-scrollbar { display: none; }
 .chip {
   display: inline-flex; align-items: center; gap: .35rem;
   min-height: 32px; padding: .25rem .7rem; border: 0; border-radius: 999px;
   background: transparent; color: var(--muted-foreground);
-  font-size: .8rem; font-weight: 500; cursor: pointer;
+  font-size: .8rem; font-weight: 500; cursor: pointer; white-space: nowrap; flex: none;
   transition: background-color .18s ease, color .18s ease;
 }
 .chip:hover { color: var(--foreground); }

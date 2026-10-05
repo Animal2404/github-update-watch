@@ -102,23 +102,8 @@ jobs:
           arch: x86_64
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: |
-            adb install -r "$APK_PATH"
-            adb shell pm list packages | grep com.guw.watch
-            adb shell am start -W -n com.guw.watch/.MainActivity
-            sleep 20
-            adb shell screencap -p /sdcard/app.png
-            adb pull /sdcard/app.png app.png
-            adb shell dumpsys activity activities | grep -m1 "mResumedActivity" || true
-            echo "--- logcat（AndroidRuntime）---"
-            adb logcat -d -s AndroidRuntime:E | tail -40 | tee logcat.txt
-            if grep -q "FATAL EXCEPTION" logcat.txt; then
-              echo "::error::App 启动时崩溃了"
-              exit 1
-            fi
-            # 确认前台 Activity 是我们的
-            adb shell dumpsys activity activities | grep -q "com.guw.watch" || (echo "::error::App 没在前台" && exit 1)
-            echo "冒烟通过"
+          # 只能是单行：这个 action 把 script 逐行交给 sh -c，多行 if/fi 会被拆断
+          script: bash tools/android-smoke.sh "$APK_PATH"
 
       - uses: actions/upload-artifact@v4
         if: always()
