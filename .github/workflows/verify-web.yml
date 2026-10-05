@@ -6,6 +6,7 @@ name: verify-web
 on:
   push:
     branches: [main]
+    paths-ignore: ['**/*.md', 'LICENSE', '.gitignore']
   pull_request:
   workflow_dispatch:
 

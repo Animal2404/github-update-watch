@@ -51,13 +51,17 @@ public/github-core.js   ← 版本比较、链接解析、GitHub 取数、基线
 手机版没有服务端，所以用「直连模式」：GitHub 的 REST API 带 `Access-Control-Allow-Origin: *`，
 WebView 可以直接请求（已在 CI 里实测通过）；列表与基线存 localStorage，卸载才丢。
 
+**新版本系统通知**三端都有，但走的路不同：网页/桌面用浏览器 Notification API，
+安卓 WebView **不支持** Web 通知，所以由 `MainActivity` 注入的 `AndroidNotify` 桥走原生通知
+（含 Android 13+ 的运行时授权与通知渠道）。设置里可开关，偏好存在本机。
+
 ## 云编译（不占本机，全部在 GitHub Actions 跑）
 
 仓库：**https://github.com/Animal2404/github-update-watch**（私有仓库；想省 CI 分钟数可改成公开）
 
 | 流水线 | 干什么 | 产出 |
 | --- | --- | --- |
-| `verify-web` | 起本机服务 → 无头 Chrome 真点每个按钮（22 项）+ 直连模式（7 项） | 截图与报告 artifact |
+| `verify-web` | 起本机服务 → 无头 Chrome 真点每个按钮（22 项）+ 直连模式（9 项，含系统通知断言） | 截图与报告 artifact |
 | `build-android` | Gradle 编译 debug/release APK → **校验 APK 里确实打进了网页资源** → 起安卓模拟器装上、启动、截图、查崩溃 | `android-apk` artifact |
 | `build-desktop` | Windows 上 electron-builder 打包；另起 Linux job 用 xvfb 真跑一遍 Electron 壳 | `desktop-windows` artifact（安装包 + 免安装版） |
 
@@ -76,7 +80,7 @@ CI 上 Electron 要加 `--no-sandbox`。
 | --- | --- | --- |
 | 顶栏 | 搜索框 | 按 owner/repo 或简介实时过滤 |
 | 顶栏 | ☾/☀ 主题 | 深色 ⇄ 浅色，选择记在 localStorage；图标带 morph 变形 |
-| 顶栏 | ⚙ 设置 | 打开设置对话框（GitHub Token），Esc / 点遮罩 / 关闭按钮都能退 |
+| 顶栏 | ⚙ 设置 | 打开设置对话框（GitHub Token + **通知开关**），Esc / 点遮罩 / 关闭按钮都能退 |
 | 添加项目 | 输入框 + 添加 | 支持完整链接、`owner/repo`、`git@github.com:owner/repo.git`；空输入会内联报错；重复添加会提示「已经在列表里」 |
 | 监测列表 | 全部检查 | 逐个项目真去问 GitHub（带进度、并发 3、按钮进入忙碌态），完成后汇总 |
 | 监测列表 | 全部/有更新/无更新/有问题 | 按状态过滤，带实时计数 |

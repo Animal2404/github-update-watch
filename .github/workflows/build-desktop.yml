@@ -6,6 +6,7 @@ name: build-desktop
 on:
   push:
     branches: [main]
+    paths-ignore: ['**/*.md', 'LICENSE', '.gitignore']
   workflow_dispatch:
 
 jobs:
