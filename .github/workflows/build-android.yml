@@ -21,7 +21,14 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
+      # 不调 android-actions/setup-android：它会去装已废弃的 'tools' 包然后失败
+      # （实测 "Failed to find package 'tools'"）。ubuntu-latest 镜像自带 Android SDK
+      # 且许可已接受，Gradle 通过 ANDROID_HOME 就能找到。
+      - name: 确认 Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms" | tail -5
+          ls "$ANDROID_HOME/build-tools" | tail -5
 
       - uses: gradle/actions/setup-gradle@v4
         with:

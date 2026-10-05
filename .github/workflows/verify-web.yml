@@ -18,7 +18,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # 必须是 22+：验证脚本用全局 WebSocket 连 CDP，Node 20 没有这个全局对象
+          node-version: '22'
 
       - name: 启动本地服务
         run: |
