@@ -10,6 +10,7 @@
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --win --x64 --publish never",
+    "dist:linux": "electron-builder --linux AppImage --x64 --publish never",
     "icons": "python tools/make-icons.py"
   },
   "devDependencies": {
@@ -19,6 +20,8 @@
   "build": {
     "appId": "com.guw.watch",
     "productName": "GitHub Update Watch",
+    "executableName": "github-update-watch",
+    "asar": false,
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -37,6 +40,11 @@
         { "target": "portable", "arch": ["x64"] }
       ],
       "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "target": ["AppImage"],
+      "category": "Utility"
     },
     "nsis": {
       "oneClick": false,

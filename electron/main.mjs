@@ -8,7 +8,7 @@
 import { app, BrowserWindow, shell } from 'electron';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -26,7 +26,10 @@ function smokeMark(obj) {
 process.env.GUW_DATA_DIR = app.getPath('userData');
 process.env.PORT = '0';   // 0 = 让系统分配空闲端口，避免和已开的实例撞车
 
-const { createServer, store, SEED, load } = await import(path.join(DIR, '..', 'server.mjs'));
+// 必须用 pathToFileURL：直接给 import() 传 Windows 路径（C:\...）会被当成 URL 协议 c:，
+// 抛 ERR_UNSUPPORTED_ESM_URL_SCHEME —— 打包后的 EXE 一启动就死，且 GUI 程序没有 stderr 根本看不到。
+const serverUrl = pathToFileURL(path.join(DIR, '..', 'server.mjs')).href;
+const { createServer, store, SEED, load } = await import(serverUrl);
 
 let server = null;
 let win = null;

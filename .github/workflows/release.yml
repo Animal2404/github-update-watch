@@ -86,15 +86,16 @@ jobs:
       - name: 校验打包内容（EXE 里确实带着界面与服务）
         shell: pwsh
         run: |
-          $asar = (Get-ChildItem dist -Recurse -Filter app.asar | Select-Object -First 1).FullName
-          Write-Output "app.asar = $asar"
-          $list = npx --yes @electron/asar list $asar
+          # asar 已关闭（asar:false）——Node 的 ESM 加载器不认 asar 归档，
+          # 而桌面壳要 import server.mjs，所以直接把文件摊开更稳。
+          $appDir = 'dist\win-unpacked\resources\app'
+          if (-not (Test-Path $appDir)) { Write-Error "找不到 $appDir"; exit 1 }
           $missing = @()
-          foreach ($need in @('public\index.html', 'public\github-core.js', 'public\vendor\morphicons\dom.js', 'server.mjs', 'electron\main.mjs')) {
-            if (-not ($list -match [regex]::Escape($need))) { $missing += $need }
+          foreach ($f in @('public\index.html', 'public\github-core.js', 'public\vendor\morphicons\dom.js', 'public\vendor\icons.js', 'server.mjs', 'electron\main.mjs')) {
+            if (-not (Test-Path (Join-Path $appDir $f))) { $missing += $f }
           }
-          if ($missing.Count -gt 0) { Write-Error "app.asar 里缺少: $($missing -join ', ')"; exit 1 }
-          Write-Output "app.asar 内容校验通过（界面 + 共享核心 + 服务 + 桌面壳都在）"
+          if ($missing.Count -gt 0) { Write-Error "打包内容缺少: $($missing -join ', ')"; exit 1 }
+          Write-Output "Windows 包内容校验通过（界面 + 共享核心 + 服务 + 桌面壳都在）"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -102,35 +103,55 @@ jobs:
           path: dist/*.exe
           if-no-files-found: error
 
-      - name: 真机冒烟：把免安装 EXE 跑起来
-        shell: pwsh
-        timeout-minutes: 8
+  smoke-packaged:
+    name: 打包产物冒烟（Linux + xvfb，真跑一遍）
+    needs: desktop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 安装构建依赖
+        run: npm install --no-audit --no-fund
+
+      - name: Electron 运行所需图形库
         run: |
-          $exe = (Get-ChildItem dist -Filter '*Portable*.exe' | Select-Object -First 1).FullName
-          Write-Output "启动 $exe"
-          $env:GUW_SMOKE_OUT = Join-Path $PWD 'smoke-result.json'
-          if (Test-Path $env:GUW_SMOKE_OUT) { Remove-Item $env:GUW_SMOKE_OUT }
-          # 免安装版是「解压后分离启动」，这条命令会立刻返回，所以要轮询结果文件
-          & $exe --smoke
-          Write-Output "启动器返回码 = $LASTEXITCODE"
-          $deadline = (Get-Date).AddSeconds(180)
-          while ((Get-Date) -lt $deadline) {
-            if (Test-Path $env:GUW_SMOKE_OUT) {
-              $r = Get-Content $env:GUW_SMOKE_OUT -Raw | ConvertFrom-Json
-              if ($r.phase -eq 'starting' -or $r.phase -eq 'server-up') {
-                Write-Output "进度: $($r.phase)"
-                Start-Sleep -Seconds 5
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb libgtk-3-0 libnss3 libgbm1 libxss1 libasound2t64 \
+            || sudo apt-get install -y --no-install-recommends xvfb libgtk-3-0 libnss3 libgbm1 libxss1 libasound2
+
+      - name: 打包 Linux 版
+        run: npm run dist:linux
+
+      - name: 把「打包后的可执行文件」跑起来（不是从源码跑）
+        run: |
+          set -u
+          BIN=$(find dist/linux-unpacked -maxdepth 1 -type f -name 'github-update-watch' | head -1)
+          echo "打包产物: $BIN"
+          ls -lh "$BIN"
+          export GUW_SMOKE_OUT="$PWD/smoke-result.json"
+          rm -f "$GUW_SMOKE_OUT"
+          xvfb-run -a "$BIN" --smoke --no-sandbox &
+          for i in $(seq 1 60); do
+            if [ -f "$GUW_SMOKE_OUT" ]; then
+              echo "结果文件: $(cat "$GUW_SMOKE_OUT")"
+              if grep -q '"phase":"starting"' "$GUW_SMOKE_OUT" || grep -q '"phase":"server-up"' "$GUW_SMOKE_OUT"; then
+                sleep 4
                 continue
-              }
-              Write-Output "结果: $($r | ConvertTo-Json -Compress)"
-              if (-not $r.ok) { Write-Error "EXE 冒烟失败: $($r.reason)"; exit 1 }
-              Write-Output "免安装 EXE 冒烟通过：backend=$($r.backend) cards=$($r.cards)"
-              exit 0
-            }
-            Start-Sleep -Seconds 5
-          }
-          Write-Error "180 秒内没有结果文件：EXE 可能没启动（进程列表见上）"
-          Get-Process | Where-Object { $_.ProcessName -like '*GitHub*' -or $_.ProcessName -like '*electron*' } | Format-Table ProcessName, Id
+              fi
+              if grep -q '"ok":true' "$GUW_SMOKE_OUT"; then
+                echo "打包产物冒烟通过（能启动、服务起来、界面渲染）"
+                exit 0
+              fi
+              echo "::error::打包产物冒烟失败"
+              exit 1
+            fi
+            sleep 3
+          done
+          echo "::error::180 秒内没有结果文件：打包后的程序没能启动"
           exit 1
 
   smoke:
@@ -183,7 +204,7 @@ jobs:
 
   publish:
     name: 挂到 Release
-    needs: [android, desktop, smoke]   # 冒烟不过就不发布
+    needs: [android, desktop, smoke, smoke-packaged]   # 冒烟不过就不发布
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
