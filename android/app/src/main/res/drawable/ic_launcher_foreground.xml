@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 自适应图标前景：绿色「下载更新」箭头，落在 108dp 画布的安全区（中间 72dp）内 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#22C55E"
+        android:pathData="M50,30 h8 v22 h11 l-15,17 -15,-17 h11 z" />
+    <path
+        android:fillColor="#22C55E"
+        android:pathData="M35,76 h38 v7 h-38 z" />
+</vector>

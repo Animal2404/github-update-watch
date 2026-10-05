@@ -1,0 +1,7 @@
+# 仓库里存 LF；只有 Windows 批处理用 CRLF。
+# 不这么做的话 CI 里从 YAML 抽出来的 bash 脚本可能带 \r，直接报 command not found。
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.ico binary
+*.png binary
+*.jar binary

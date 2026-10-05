@@ -1,0 +1,116 @@
+name: build-android
+
+# 安卓 APK：完全在 GitHub 云端编译，并跑一次模拟器冒烟测试（装上、启动、截图、确认没崩）。
+# APK 里的界面就是仓库里的 public/（由 android/app/build.gradle 的 syncWebAssets 同步进 assets），
+# 所以手机版和电脑版是同一份前端 + 同一份 github-core.js。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  apk:
+    name: 编译 APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: 编译 debug 与 release APK
+        working-directory: android
+        run: gradle assembleDebug assembleRelease --no-daemon --stacktrace
+
+      - name: 校验 APK 内确实打进了网页资源
+        run: |
+          set -e
+          APK=$(find android/app/build/outputs/apk -name '*.apk' | head -1)
+          echo "检查 $APK"
+          unzip -l "$APK" | tee apk-contents.txt | grep -q 'assets/www/index.html'
+          unzip -l "$APK" | grep -q 'assets/www/github-core.js'
+          unzip -l "$APK" | grep -q 'assets/www/vendor/morphicons/dom.js'
+          unzip -l "$APK" | grep -q 'assets/www/styles.css'
+          echo "网页资源已打进 APK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+
+      - name: 记录 APK 体积
+        run: ls -lh android/app/build/outputs/apk/*/*.apk
+
+  smoke:
+    name: 模拟器冒烟（装上并启动）
+    needs: apk
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-apk
+          path: apk
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 找出 APK 路径
+        run: |
+          APK=$(find apk -name '*.apk' | head -1)
+          echo "找到 $APK"
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+
+      - name: 打开 KVM 加速
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: 模拟器安装并启动 App
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            adb install -r "$APK_PATH"
+            adb shell pm list packages | grep com.guw.watch
+            adb shell am start -W -n com.guw.watch/.MainActivity
+            sleep 20
+            adb shell screencap -p /sdcard/app.png
+            adb pull /sdcard/app.png app.png
+            adb shell dumpsys activity activities | grep -m1 "mResumedActivity" || true
+            echo "--- logcat（AndroidRuntime）---"
+            adb logcat -d -s AndroidRuntime:E | tail -40 | tee logcat.txt
+            if grep -q "FATAL EXCEPTION" logcat.txt; then
+              echo "::error::App 启动时崩溃了"
+              exit 1
+            fi
+            # 确认前台 Activity 是我们的
+            adb shell dumpsys activity activities | grep -q "com.guw.watch" || (echo "::error::App 没在前台" && exit 1)
+            echo "冒烟通过"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-smoke-shot
+          path: |
+            app.png
+            logcat.txt
+          if-no-files-found: warn

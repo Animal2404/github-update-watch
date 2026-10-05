@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GitHub 更新监测</title>
+<meta name="description" content="自定义 GitHub 项目列表，检测是否有新版本发布。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2322c55e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12a9 9 0 1 1-2.64-6.36'/%3E%3Cpath d='M21 3v6h-6'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" media="print" onload="this.media='all'"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主内容</a>
+
+<div class="app">
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg class="icon icon-lg" viewBox="0 0 24 24"><path data-icon="refresh-cw"></path></svg>
+      </span>
+      <div>
+        <h1>GitHub 更新监测</h1>
+        <div class="sub">自定义项目列表 · 检测新版本发布</div>
+      </div>
+      <span class="badge badge-clean badge-mono" id="rateBadge" title="GitHub API 剩余额度">额度 —</span>
+    </div>
+
+    <div class="header-actions">
+      <div class="search">
+        <svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true"><path data-icon="search"></path></svg>
+        <label class="sr-only" for="searchInput">搜索项目</label>
+        <input class="input" id="searchInput" type="search" placeholder="搜索项目…" autocomplete="off">
+      </div>
+      <button class="btn btn-icon btn-outline" id="themeBtn" type="button" aria-label="切换深色/浅色主题" title="切换主题">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path data-icon="moon"></path></svg>
+      </button>
+      <button class="btn btn-icon btn-outline" id="settingsBtn" type="button" aria-label="设置" title="设置">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path data-icon="settings-2"></path></svg>
+      </button>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- 添加项目 -->
+    <section class="card panel" aria-labelledby="addTitle">
+      <div class="panel-head">
+        <svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true"><path data-icon="plus"></path></svg>
+        <h2 id="addTitle">添加项目</h2>
+      </div>
+      <form id="addForm" novalidate>
+        <div class="field-row">
+          <div class="field">
+            <label class="sr-only" for="repoInput">GitHub 仓库地址</label>
+            <input class="input" id="repoInput" name="repo" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="粘贴链接或填 owner/repo，如 https://github.com/facebook/react"
+                   aria-describedby="repoHint">
+            <p class="hint" id="repoHint">支持完整链接、<code>owner/repo</code>、<code>git@github.com:owner/repo.git</code>；添加时会把当前最新版本记为基线。</p>
+          </div>
+          <button class="btn btn-primary" id="addBtn" type="submit">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path data-icon="plus"></path></svg>
+            <span id="addBtnLabel">添加</span>
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <!-- 工具栏 -->
+    <section class="card panel" aria-labelledby="listTitle">
+      <div class="panel-head">
+        <svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true"><path data-icon="activity"></path></svg>
+        <h2 id="listTitle">监测列表</h2>
+      </div>
+      <p class="hint" id="lastRunLine">尚未检查过</p>
+      <div class="toolbar-row">
+        <button class="btn btn-secondary" id="checkAllBtn" type="button">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path data-icon="refresh-cw"></path></svg>
+          <span id="checkAllLabel">全部检查</span>
+        </button>
+        <div class="filters" role="group" aria-label="按状态过滤">
+          <button class="chip" type="button" data-filter="all" aria-pressed="true">全部 <span class="count" id="countAll">0</span></button>
+          <button class="chip" type="button" data-filter="update" aria-pressed="false">有更新 <span class="count" id="countUpdate">0</span></button>
+          <button class="chip" type="button" data-filter="clean" aria-pressed="false">无更新 <span class="count" id="countClean">0</span></button>
+          <button class="chip" type="button" data-filter="error" aria-pressed="false">有问题 <span class="count" id="countError">0</span></button>
+        </div>
+        <span class="status-line" id="jobStatus" role="status" aria-live="polite"></span>
+      </div>
+    </section>
+
+    <!-- 列表 -->
+    <section id="grid" class="grid" aria-label="项目列表" aria-busy="true"></section>
+
+    <div class="card empty" id="emptyState" hidden>
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path data-icon="inbox"></path></svg>
+      <h3 id="emptyTitle">还没有监测任何项目</h3>
+      <p id="emptyText">在上面粘贴一个 GitHub 链接开始吧。添加后它会记录当前最新版本作为基线，之后每次检查都会告诉你有没有新版本。</p>
+    </div>
+  </main>
+</div>
+
+<div class="toasts" id="toasts" role="status" aria-live="polite" aria-atomic="false"></div>
+
+<!-- 设置 -->
+<dialog id="settingsDialog" aria-labelledby="settingsTitle">
+  <div class="dialog-body">
+    <div class="dialog-head">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path data-icon="settings-2"></path></svg>
+      <h2 id="settingsTitle">设置</h2>
+    </div>
+    <div>
+      <label class="label" for="tokenInput">GitHub Token（可选）</label>
+      <input class="input" id="tokenInput" type="password" autocomplete="off" spellcheck="false" placeholder="ghp_… 或 github_pat_…">
+      <p class="hint" id="tokenHint">不填也能用，但未认证限流只有 60 次/小时；填了可提升到 5000 次/小时。Token 只保存在本机 <code>data/repos.json</code>，不会外发。</p>
+    </div>
+    <p class="hint" id="rateHint"></p>
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" id="tokenClearBtn" type="button">清除 Token</button>
+      <button class="btn btn-outline" id="settingsCloseBtn" type="button">关闭</button>
+      <button class="btn btn-primary" id="tokenSaveBtn" type="button">保存</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- 删除确认 -->
+<dialog id="confirmDialog" aria-labelledby="confirmTitle">
+  <div class="dialog-body">
+    <div class="dialog-head">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path data-icon="triangle-alert"></path></svg>
+      <h2 id="confirmTitle">删除项目</h2>
+    </div>
+    <p id="confirmText">确定要从监测列表里移除这个项目吗？</p>
+    <div class="dialog-actions">
+      <button class="btn btn-outline" id="confirmCancelBtn" type="button">取消</button>
+      <button class="btn btn-solid-danger" id="confirmOkBtn" type="button">删除</button>
+    </div>
+  </div>
+</dialog>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>

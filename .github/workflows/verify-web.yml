@@ -1,0 +1,48 @@
+name: verify-web
+
+# 云端验证「界面 + 逻辑」：不是只看能不能编译，而是真的用无头 Chrome 把每个按钮点一遍。
+# 两种模式都验：本机服务模式（桌面）与直连模式（安卓 APK 用的就是后者）。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: 逐按钮验证（本机服务 + 直连两种模式）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 启动本地服务
+        run: |
+          node server.mjs > server.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:7321/api/ping && echo "服务已就绪" && break
+            sleep 1
+          done
+          cat server.log
+
+      - name: 逐按钮验证（本机服务模式，22 项断言）
+        run: node tools/verify-ui.mjs http://127.0.0.1:7321/
+
+      - name: 逐按钮验证（直连模式 = APK 走的路径，7 项断言）
+        run: node tools/verify-direct.mjs
+
+      - name: 上传截图与报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-verify-artifacts
+          path: |
+            data/shots/*.png
+            data/verify-report.json
+            data/verify-direct-report.json
+            server.log
+          if-no-files-found: warn

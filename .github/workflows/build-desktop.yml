@@ -1,0 +1,37 @@
+name: build-desktop
+
+# Windows 桌面版：Electron 外壳 + 仓库里的 server.mjs 与 public/，在云端打出安装包与免安装版。
+# 桌面版没有另写界面——用的是同一份网页与同一份 github-core.js。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    name: 打包 Windows 安装包 / 免安装版
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装构建依赖
+        run: npm install --no-audit --no-fund
+
+      - name: 打包（nsis 安装包 + portable 免安装）
+        run: npm run dist
+
+      - name: 列出产物
+        run: Get-ChildItem dist | Format-Table Name, Length
+        shell: pwsh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows
+          path: |
+            dist/*.exe
+          if-no-files-found: error

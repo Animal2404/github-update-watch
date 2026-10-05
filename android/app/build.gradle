@@ -1,0 +1,58 @@
+// 安卓 App 模块：APK 用的就是 public/ 里那套界面，assets 由 Gradle 在构建时同步过去
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.guw.watch'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.guw.watch'
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName '1.0.0'
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix ''
+        }
+        release {
+            minifyEnabled false
+            // 用 debug 签名，方便直接从 CI 产物安装体验；正式发布请换成自己的 keystore
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    // 仓库里不重复存一份网页代码：构建时把 ../public 同步进 assets/www
+    sourceSets {
+        main {
+            assets.srcDirs = ["$projectDir/src/main/assets"]
+        }
+    }
+}
+
+def webSrc = file("${rootDir}/../public")
+def webDst = file("${projectDir}/src/main/assets/www")
+
+tasks.register('syncWebAssets', Sync) {
+    from webSrc
+    into webDst
+    // vendor 目录里是本地化的 morphicons，一并带进去
+    doFirst { logger.lifecycle("同步网页资源: ${webSrc} -> ${webDst}") }
+}
+
+tasks.matching { it.name.startsWith('merge') && it.name.endsWith('Assets') }.configureEach {
+    dependsOn 'syncWebAssets'
+}
+
+dependencies {
+    implementation 'androidx.webkit:webkit:1.11.0'
+}

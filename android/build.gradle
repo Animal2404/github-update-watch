@@ -1,0 +1,8 @@
+// 根项目：只声明 AGP，依赖在 app 模块里
+plugins {
+    id 'com.android.application' version '8.5.2' apply false
+}
+
+tasks.register('clean', Delete) {
+    delete rootProject.layout.buildDirectory
+}
