@@ -56,4 +56,5 @@ jobs:
             || sudo apt-get install -y --no-install-recommends xvfb libgtk-3-0 libnss3 libasound2 libgbm1 libxss1
 
       - name: 起壳并等界面渲染（无头）
-        run: xvfb-run -a npx electron . --smoke
+        # --no-sandbox：CI 上 Electron 的 chrome-sandbox 没有 4755/root 属主，不加会直接 abort
+        run: xvfb-run -a npx electron . --smoke --no-sandbox
