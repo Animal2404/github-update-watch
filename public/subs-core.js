@@ -123,7 +123,29 @@ function unquote(value) {
   return v;
 }
 
-/** 解析普通机场的 base64 节点列表（ss:// vmess:// …） */
+function quotaFromParams(params) {
+  const total = Number(params.get('total'));
+  if (!Number.isFinite(total) || total <= 0) return null;
+  const upload = Number(params.get('upload')) || 0;
+  const download = Number(params.get('download') || params.get('used')) || 0;
+  const expire = Number(params.get('expire')) || 0;
+  return { upload, download, total, expire };
+}
+
+/** 少数机场会在节点 URI 的查询串/片段里附带 total/used（非标准），有就按"机场提供"处理 */
+function quotaFromUri(uri) {
+  try {
+    const u = new URL(uri);
+    const direct = quotaFromParams(u.searchParams);
+    if (direct) return direct;
+    const hash = u.hash ? u.hash.slice(1) : '';
+    const q = hash.indexOf('?');
+    if (q >= 0) return quotaFromParams(new URLSearchParams(hash.slice(q + 1)));
+  } catch { /* 非法 URI 就当作没有节点级额度 */ }
+  return null;
+}
+
+/** 解析普通机场的 base64 节点列表（ss:// vmess:// …），同时带出 server/port */
 function parseUriList(text) {
   const nodes = [];
   for (const line of text.split(/\r?\n/)) {
@@ -131,10 +153,52 @@ function parseUriList(text) {
     if (!s) continue;
     const m = /^([a-z0-9]+):\/\//i.exec(s);
     if (!m || !NODE_SCHEMES.includes(m[1].toLowerCase())) continue;
+    const type = m[1].toLowerCase();
     const hash = s.indexOf('#');
     let name = '';
-    if (hash >= 0) { try { name = decodeURIComponent(s.slice(hash + 1)); } catch { name = s.slice(hash + 1); } }
-    nodes.push({ name: name || `节点 ${nodes.length + 1}`, type: m[1].toLowerCase() });
+    if (hash >= 0) {
+      const frag = s.slice(hash + 1);
+      const q = frag.indexOf('?');
+      const raw = q >= 0 ? frag.slice(0, q) : frag;   // 片段里的 ?total=… 是额度元数据，不算名字
+      try { name = decodeURIComponent(raw); } catch { name = raw; }
+    }
+    let server = '';
+    let port = 0;
+    let quota = quotaFromUri(s);
+
+    if (type === 'vmess') {
+      try {
+        const json = JSON.parse(b64ToUtf8(s.slice(8)));
+        name = name || json.ps || json.name || '';
+        server = json.add || '';
+        port = Number(json.port) || 0;
+        if (!quota && Number(json.total) > 0) {
+          quota = { upload: Number(json.upload) || 0, download: Number(json.used) || 0, total: Number(json.total), expire: Number(json.expire) || 0 };
+        }
+      } catch { /* vmess 的 base64 JSON 解析失败就只留名字 */ }
+    } else {
+      try {
+        const u = new URL(s);
+        server = u.hostname || '';
+        port = Number(u.port) || 0;
+      } catch {
+        const mm = /@\[?([^\]/:]+)\]?:(\d+)/.exec(s);
+        if (mm) { server = mm[1]; port = Number(mm[2]) || 0; }
+      }
+      // 老式 ss://base64(method:pass@host:port)
+      if (!server && type === 'ss') {
+        try {
+          const decoded = b64ToUtf8(s.slice(5).replace(/#.*$/, ''));
+          const mm = /@\[?([^\]/:]+)\]?:(\d+)/.exec(decoded);
+          if (mm) { server = mm[1]; port = Number(mm[2]) || 0; }
+        } catch { /* 忽略 */ }
+      }
+    }
+    const node = { name: name || `节点 ${nodes.length + 1}`, type };
+    if (server) node.server = server;
+    if (port) node.port = port;
+    if (quota) node.quota = quota;
+    nodes.push(node);
   }
   return nodes;
 }
@@ -161,9 +225,18 @@ function parseClashProxies(text) {
     const flow = /^\s*-\s*\{(.+)\}\s*$/.exec(line);
     if (flow) {
       const body = flow[1];
-      const nameM = /(?:^|[,{])\s*name\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^']*)'|[^,}]+)/.exec(body);
-      const typeM = /(?:^|[,{])\s*type\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^']*)'|[^,}]+)/.exec(body);
-      if (nameM) nodes.push({ name: unquote(nameM[1]), type: unquote(typeM ? typeM[1] : '').toLowerCase() || 'unknown' });
+      const pick = (key) => {
+        const m = new RegExp('(?:^|[,{])\\s*' + key + '\\s*:\\s*("(?:[^"\\\\]|\\\\.)*"|\'(?:[^\']*)\'|[^,}]+)').exec(body);
+        return m ? unquote(m[1]) : '';
+      };
+      const name = pick('name');
+      if (!name) continue;
+      const node = { name, type: (pick('type') || 'unknown').toLowerCase() };
+      const server = pick('server');
+      const port = Number(pick('port'));
+      if (server) node.server = server;
+      if (port) node.port = port;
+      nodes.push(node);
       continue;
     }
     const dashName = /^\s*-\s*name\s*:\s*(.+)$/.exec(line);
@@ -174,6 +247,13 @@ function parseClashProxies(text) {
     }
     const typeLine = /^\s*type\s*:\s*(.+)$/.exec(line);
     if (typeLine && current) current.type = unquote(typeLine[1]).toLowerCase();
+    const serverLine = /^\s*server\s*:\s*(.+)$/.exec(line);
+    if (serverLine && current) current.server = unquote(serverLine[1]);
+    const portLine = /^\s*port\s*:\s*(.+)$/.exec(line);
+    if (portLine && current) {
+      const n = Number(unquote(portLine[1]));
+      if (Number.isFinite(n)) current.port = n;
+    }
     if (/^\s*-\s*\S/.test(line) && !dashName) current = null;
   }
   return nodes.filter((n) => n.name && !/^(DIRECT|REJECT|GLOBAL|PASS)$/i.test(n.name));
@@ -218,6 +298,26 @@ export async function fetchSubscription(fetchText, url) {
   return { quota, ...parsed };
 }
 
+/**
+ * 单个节点的额度视图。三种来源，界面必须如实标注：
+ *   node     — 机场在节点 URI 里带了 total/used（非标准，少见）
+ *   shared   — 整条订阅共用一个池（标准 subscription-userinfo；默认）
+ *   estimate — 把整条订阅的剩余额度 ÷ 节点数（明确标"估算"，不是机场按节点计量）
+ *   unknown  — 连整条订阅额度都没有
+ */
+export function nodeQuotaView(node, subQuota, nodeCount, mode = 'shared', now = Date.now()) {
+  if (node && node.quota && node.quota.total > 0) {
+    return { ...quotaView(node.quota, now), source: 'node' };
+  }
+  const base = quotaView(subQuota, now);
+  if (!base) return { source: 'unknown' };
+  if (mode === 'estimate' && nodeCount > 0) {
+    const perNode = quotaView({ upload: 0, download: base.used / nodeCount, total: base.total / nodeCount, expire: subQuota.expire }, now);
+    return { ...perNode, source: 'estimate', share: nodeCount };
+  }
+  return { ...base, source: 'shared' };
+}
+
 /** 存进存储层的记录 → 给界面的只读视图（永远不含完整 URL） */
 export function publicSubscription(rec) {
   return {
@@ -230,6 +330,7 @@ export function publicSubscription(rec) {
     error: rec.error || null,
     format: rec.format || null,
     quota: quotaView(rec.quota),
+    quotaRaw: rec.quota || null,
     nodes: rec.nodes || { count: 0, protocols: {}, nodes: [] },
   };
 }

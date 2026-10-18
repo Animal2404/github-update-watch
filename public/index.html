@@ -96,6 +96,22 @@
       <div class="toolbar-row">
         <h2 class="deck-title" id="subTitle">节点订阅</h2>
         <span class="muted-note" id="subSummary">导入机场订阅，查看流量额度与节点</span>
+        <div class="sub-controls">
+          <label class="inline-control">节点额度
+            <select class="select" id="nodeQuotaMode" aria-label="节点额度口径">
+              <option value="shared">共用（真实）</option>
+              <option value="estimate">均分（估算）</option>
+            </select>
+          </label>
+          <label class="inline-control">排序
+            <select class="select" id="nodeSort" aria-label="节点排序">
+              <option value="quota-desc">额度高→低</option>
+              <option value="quota-asc">额度低→高</option>
+              <option value="name">名称</option>
+              <option value="protocol">协议</option>
+            </select>
+          </label>
+        </div>
       </div>
       <form class="add-row" id="subForm" novalidate>
         <div class="field">
@@ -109,7 +125,7 @@
         </div>
         <button class="btn btn-primary" id="subAddBtn" type="submit">导入</button>
       </form>
-      <p class="sub-purpose"><b>这个面板只做两件事</b>：读取订阅的总流量 / 到期时间，并统计节点数量。它不是代理客户端——选节点、测延迟、连线路请用 FlClash 或 mihomo。额度只有机场在响应头 <code>subscription-userinfo</code> 里返回时才有，没有就显示“未知”，不会编造每个节点的额度。</p>
+      <p class="sub-purpose"><b>这个面板只做两件事</b>：读取订阅的总流量 / 到期时间，并统计节点数量。它不是代理客户端——选节点、测延迟、连线路请用 FlClash 或 mihomo。额度只有机场在响应头 <code>subscription-userinfo</code> 里返回时才有。节点表会标出来源：<b>共用</b> = 整条订阅一个池（真实）；<b>估算</b> = 剩余额度 ÷ 节点数（本应用换算，不是机场按节点计量）；没有数据就显示“未知”。</p>
       <p class="hint" id="subHint">链接只存在本机（桌面端加密落盘），界面只显示脱敏形式。</p>
       <div id="subList" class="sub-list"></div>
     </section>

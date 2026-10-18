@@ -269,7 +269,9 @@ export function createServer() {
       }
       if (req.method === 'POST' && p === '/api/settings') {
         const body = await readBody(req);
-        return sendJson(res, 200, store.setToken(body?.token));
+        const tokenNote = body && 'token' in body ? store.setToken(body.token) : null;
+        const modeNote = body && body.nodeQuotaMode ? store.setNodeQuotaMode(body.nodeQuotaMode) : null;
+        return sendJson(res, 200, { ...(tokenNote || {}), ...(modeNote || {}), nodeQuotaMode: store.settings.nodeQuotaMode });
       }
       return sendJson(res, 404, { error: `未知接口 ${req.method} ${p}` });
     } catch (e) {

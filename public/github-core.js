@@ -239,7 +239,7 @@ export function createStore({ github, load, save, fetchText, subscriptionFetch }
   const persisted = load?.() || {};
   const repos = Array.isArray(persisted.repos) ? persisted.repos : [];
   const subscriptions = Array.isArray(persisted.subscriptions) ? persisted.subscriptions : [];
-  const settings = { token: '', lastRunAt: null, ...(persisted.settings || {}) };
+  const settings = { token: '', lastRunAt: null, nodeQuotaMode: 'shared', ...(persisted.settings || {}) };
   let job = null;
 
   const persist = () => { try { save?.({ repos, settings, subscriptions }); } catch { /* 存储失败不该让功能崩掉 */ } };
@@ -322,6 +322,7 @@ export function createStore({ github, load, save, fetchText, subscriptionFetch }
       hasToken: !!settings.token,
       tokenHint: settings.token ? `${settings.token.slice(0, 4)}••••${settings.token.slice(-4)}` : '',
       lastRunAt: settings.lastRunAt,
+      nodeQuotaMode: settings.nodeQuotaMode === 'estimate' ? 'estimate' : 'shared',
       ...extra,
     }),
 
@@ -462,6 +463,13 @@ export function createStore({ github, load, save, fetchText, subscriptionFetch }
       github.clearCache();
       persist();
       return { hasToken: !!settings.token, note: settings.token ? 'Token 已保存（可提升到 5000 次/小时）' : 'Token 已清除' };
+    },
+
+    /** 节点额度口径：shared=整条订阅共用（真实）；estimate=剩余额度÷节点数（标注为估算） */
+    setNodeQuotaMode(mode) {
+      settings.nodeQuotaMode = mode === 'estimate' ? 'estimate' : 'shared';
+      persist();
+      return { nodeQuotaMode: settings.nodeQuotaMode };
     },
 
     /** 首次使用的示例项目（只在没有数据文件时用） */

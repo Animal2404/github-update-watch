@@ -9,6 +9,7 @@
 import { createMorph } from './vendor/morphicons/dom.js';
 import { icons } from './vendor/icons.js';
 import { createGithub, createStore, esc } from './github-core.js';
+import { nodeQuotaView } from './subs-core.js';
 
 // ---------------------------------------------------------------- 后端选择
 // 桌面版：页面由 server.mjs 提供，走 /api/*（Node 侧有 curl 代理退让链 + 磁盘存储）
@@ -42,6 +43,7 @@ const httpBackend = {
   refreshSub: (id) => api('/api/subs/' + encodeURIComponent(id) + '/refresh', { method: 'POST' }),
   removeSub: (id) => api('/api/subs/' + encodeURIComponent(id), { method: 'DELETE' }),
   setToken: (token) => api('/api/settings', { method: 'POST', body: { token } }),
+  setNodeQuotaMode: (mode) => api('/api/settings', { method: 'POST', body: { nodeQuotaMode: mode } }),
 };
 
 const directBackend = (() => {
@@ -105,6 +107,7 @@ const directBackend = (() => {
     refreshSub: (id) => store.refreshSubscription(id),
     removeSub: (id) => store.removeSubscription(id),
     setToken: (token) => store.setToken(token),
+    setNodeQuotaMode: (mode) => store.setNodeQuotaMode(mode),
   };
 })();
 
@@ -171,7 +174,7 @@ function initAllIcons(root = document) {
 }
 
 // ---------------------------------------------------------------- 状态
-const state = { repos: [], subscriptions: [], filter: 'all', query: '', job: null, hasToken: false, rate: null, transport: null, lastRunAt: null };
+const state = { repos: [], subscriptions: [], filter: 'all', query: '', job: null, hasToken: false, rate: null, transport: null, lastRunAt: null, nodeQuotaMode: 'shared', nodeSort: 'quota-desc' };
 const $ = (sel) => document.querySelector(sel);
 const grid = $('#grid');
 const emptyState = $('#emptyState');
@@ -511,6 +514,7 @@ async function refresh({ quiet = false } = {}) {
     state.rate = data.rate || null;
     state.transport = data.transport || null;
     state.lastRunAt = data.lastRunAt || null;
+    state.nodeQuotaMode = data.nodeQuotaMode === 'estimate' ? 'estimate' : 'shared';
     renderGrid(); renderHeader(); renderJob(); renderSubs();
     return data;
   } catch (e) {
@@ -742,6 +746,36 @@ function fmtBytes(n) {
   return text + ' ' + units[i];
 }
 
+function nodeQuotaText(view) {
+  if (!view || view.source === 'unknown') return { text: '未知', pct: null, title: '机场没有返回额度信息' };
+  if (view.unlimited) return { text: '不限流量', pct: null, title: '订阅没有给总量（机场按不限量处理）' };
+  if (view.source === 'node') return { text: '剩 ' + fmtBytes(view.remaining) + ' / ' + fmtBytes(view.total), pct: view.percent, title: '机场在节点信息里提供的额度' };
+  if (view.source === 'estimate') return { text: '估算 · 剩 ' + fmtBytes(view.remaining), pct: view.percent, title: '整条订阅剩余额度 ÷ ' + view.share + ' 个节点（估算，不是机场按节点计量）' };
+  return { text: '共用 · 剩 ' + fmtBytes(view.remaining), pct: view.percent, title: '整条订阅共用一个流量池' };
+}
+
+function sortSubNodes(sub) {
+  var nodes = (sub.nodes && sub.nodes.nodes) || [];
+  var rows = nodes.map(function (node) {
+    return { node: node, view: nodeQuotaView(node, sub.quotaRaw, nodes.length, state.nodeQuotaMode) };
+  });
+  var cmp = {
+    'quota-desc': function (a, b) {
+      return (b.view.percent || 0) - (a.view.percent || 0) || (b.view.remaining || 0) - (a.view.remaining || 0) || a.node.name.localeCompare(b.node.name, 'zh');
+    },
+    'quota-asc': function (a, b) {
+      return (a.view.percent || 0) - (b.view.percent || 0) || (a.view.remaining || 0) - (b.view.remaining || 0) || a.node.name.localeCompare(b.node.name, 'zh');
+    },
+    'name': function (a, b) { return a.node.name.localeCompare(b.node.name, 'zh'); },
+    'protocol': function (a, b) { return String(a.node.type || '').localeCompare(String(b.node.type || '')) || a.node.name.localeCompare(b.node.name, 'zh'); },
+  }[state.nodeSort] || null;
+  var known = rows.filter(function (row) { return row.view.source !== 'unknown'; });
+  var unknown = rows.filter(function (row) { return row.view.source === 'unknown'; });
+  if (cmp) known.sort(cmp);
+  unknown.sort(function (a, b) { return a.node.name.localeCompare(b.node.name, 'zh'); });
+  return known.concat(unknown);
+}
+
 function subStatus(sub) {
   if (sub.error) return { cls: 'badge-error', text: '拉取失败', icon: 'circle-alert' };
   if (sub.quota && sub.quota.expired) return { cls: 'badge-warn', text: '已过期', icon: 'clock' };
@@ -786,6 +820,26 @@ function subCardHtml(sub) {
 
   html += '<div class="sub-meta"><span>' + (sub.nodes ? sub.nodes.count : 0) + ' 个节点</span>' + protos;
   html += '<span>更新 ' + fmtDate(sub.lastCheckedAt) + '</span></div>';
+
+  var ranked = sortSubNodes(sub);
+  if (ranked.length) {
+    html += '<div class="node-table-wrap"><div class="node-scroll">';
+    html += '<table class="node-table"><caption class="sr-only">节点额度（只读）</caption>';
+    html += '<thead><tr><th scope="col">节点</th><th scope="col">额度</th></tr></thead><tbody>';
+    ranked.slice(0, 200).forEach(function (row) {
+      var q = nodeQuotaText(row.view);
+      var node = row.node;
+      var where = node.server ? (node.server + (node.port ? ':' + node.port : '')) : '';
+      html += '<tr data-node="' + esc(node.name) + '" data-source="' + esc(row.view.source) + '">';
+      html += '<td><div class="node-name"><b>' + esc(node.name) + '</b><span class="node-sub"><span class="proto">' + esc(node.type || '?') + '</span>' + esc(where) + '</span></div></td>';
+      html += '<td><div class="node-quota" data-source="' + esc(row.view.source) + '" title="' + esc(q.title) + '">';
+      html += '<div class="node-quota-line"><span>' + esc(q.text) + '</span>' + (q.pct == null ? '' : '<span class="src">' + q.pct + '%</span>') + '</div>';
+      if (q.pct != null) html += '<div class="node-bar"><span style="width:' + Math.max(0, Math.min(100, q.pct)) + '%"></span></div>';
+      html += '</div></td></tr>';
+    });
+    html += '</tbody></table></div></div>';
+    html += '<p class="node-note">额度来源：<b>共用</b> = 整条订阅的流量池；<b>估算</b> = 剩余额度 ÷ 节点数。两者都不是机场按节点计量。</p>';
+  }
   if (sub.error) html += '<div class="repo-error">' + esc(sub.error) + '</div>';
 
   html += '<div class="sub-actions">';
@@ -797,7 +851,15 @@ function subCardHtml(sub) {
   return html;
 }
 
+function syncSubControls() {
+  var mode = $('#nodeQuotaMode');
+  var sort = $('#nodeSort');
+  if (mode) mode.value = state.nodeQuotaMode;
+  if (sort) sort.value = state.nodeSort;
+}
+
 function renderSubs() {
+  syncSubControls();
   var list = $('#subList');
   if (!list) return;
   var subs = state.subscriptions || [];
@@ -810,6 +872,25 @@ function renderSubs() {
   list.innerHTML = subs.map(subCardHtml).join('');
   initAllIcons(list);
 }
+
+$('#nodeQuotaMode').addEventListener('change', async (ev) => {
+  var mode = ev.target.value === 'estimate' ? 'estimate' : 'shared';
+  try {
+    await backend.setNodeQuotaMode(mode);
+    state.nodeQuotaMode = mode;
+    renderSubs();
+    toast(mode === 'estimate' ? '已切换为均分估算（不是机场按节点计量）' : '已切换为整条订阅共用额度', 'info');
+  } catch (e) {
+    toast(e.message, 'error');
+    ev.target.value = state.nodeQuotaMode;
+  }
+});
+
+$('#nodeSort').addEventListener('change', (ev) => {
+  state.nodeSort = ev.target.value;
+  try { localStorage.setItem('guw-node-sort', state.nodeSort); } catch { /* 忽略 */ }
+  renderSubs();
+});
 
 $('#subForm').addEventListener('submit', async (ev) => {
   ev.preventDefault();
@@ -1039,6 +1120,7 @@ async function renderUpdateBadge(force) {
 // ---------------------------------------------------------------- 启动
 (async function boot() {
   initAllIcons();
+  try { if (localStorage.getItem('guw-node-sort')) state.nodeSort = localStorage.getItem('guw-node-sort'); } catch { /* 忽略 */ }
   applyTheme(localStorage.getItem('guw-theme') || 'dark');
   requestAnimationFrame(updateFilterThumb);
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(updateFilterThumb).catch(() => {});

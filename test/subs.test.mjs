@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   subId, normalizeSubUrl, maskUrl, hostOf, headerValue,
-  parseUserInfo, quotaView, parseSubscriptionBody, publicSubscription,
+  parseUserInfo, quotaView, parseSubscriptionBody, publicSubscription, nodeQuotaView,
 } from '../public/subs-core.js';
 import { createStore } from '../public/github-core.js';
 
@@ -123,4 +123,55 @@ test('store：导入 / 重复 / 刷新失败脱敏 / 删除 / 持久化', async 
 
   store.removeSubscription(added.subscription.id);
   assert.equal(store.getState().subscriptions.length, 0);
+});
+
+
+test('节点解析：server/port 与机场自带的节点额度元数据', () => {
+  const uri = 'ss://YWVzLTI1Ni1nY206cGFzcw@1.2.3.4:8443#HK%2001?total=1073741824&used=268435456&expire=1795000000';
+  const parsed = parseSubscriptionBody(uri);
+  assert.equal(parsed.count, 1);
+  const node = parsed.nodes[0];
+  assert.equal(node.name, 'HK 01');
+  assert.equal(node.server, '1.2.3.4');
+  assert.equal(node.port, 8443);
+  assert.equal(node.quota.total, 1073741824);
+  assert.equal(node.quota.download, 268435456);
+  assert.equal(node.quota.expire, 1795000000);
+
+  const clash = parseSubscriptionBody('proxies:\n  - {name: "JP", type: trojan, server: jp.example.com, port: 443}');
+  assert.equal(clash.nodes[0].server, 'jp.example.com');
+  assert.equal(clash.nodes[0].port, 443);
+});
+
+test('节点额度视图：共用 / 均分估算 / 机场节点额度 / 未知，来源必须区分', () => {
+  const now = 1_700_000_000_000;
+  const sub = { upload: 10, download: 30, total: 100, expire: 1_700_086_400 };
+  const shared = nodeQuotaView({ name: 'a', type: 'ss' }, sub, 4, 'shared', now);
+  assert.equal(shared.source, 'shared');
+  assert.equal(shared.percent, 40);
+  assert.equal(shared.remaining, 60);
+
+  const estimate = nodeQuotaView({ name: 'a', type: 'ss' }, sub, 4, 'estimate', now);
+  assert.equal(estimate.source, 'estimate');
+  assert.equal(estimate.remaining, 15);
+  assert.equal(estimate.percent, 40);
+
+  const own = nodeQuotaView({ name: 'b', type: 'ss', quota: { upload: 0, download: 50, total: 100, expire: 0 } }, sub, 4, 'shared', now);
+  assert.equal(own.source, 'node');
+  assert.equal(own.percent, 50);
+
+  assert.equal(nodeQuotaView({ name: 'c', type: 'ss' }, null, 4, 'shared', now).source, 'unknown');
+});
+
+
+test('nodes quota mode：默认 shared，estimate 可持久化，非法值回落', () => {
+  const github = { gh: async () => null, fetchLatest: async () => null, rate: async () => null, clearCache() {} };
+  let persisted = null;
+  const store = createStore({ github, load: () => persisted, save: (s) => { persisted = s; } });
+  assert.equal(store.getState().nodeQuotaMode, 'shared');
+  store.setNodeQuotaMode('estimate');
+  assert.equal(store.getState().nodeQuotaMode, 'estimate');
+  assert.equal(persisted.settings.nodeQuotaMode, 'estimate');
+  store.setNodeQuotaMode('bogus');
+  assert.equal(store.getState().nodeQuotaMode, 'shared');
 });
