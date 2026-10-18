@@ -32,6 +32,7 @@ const httpBackend = {
   kind: 'server',
   label: '本机服务',
   state: () => api('/api/state'),
+  rate: () => api('/api/rate'),
   add: (input) => api('/api/repos', { method: 'POST', body: { input } }),
   remove: (id) => api(`/api/repos/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   check: (id) => api(`/api/repos/${encodeURIComponent(id)}/check`, { method: 'POST' }),
@@ -96,6 +97,7 @@ const directBackend = (() => {
       }
       return store.getState({ transport: 'browser-direct', rate });
     },
+    rate: async () => ({ rate: await github.rate(store.settings.token, { fresh: true }) }),
     add: (input) => store.add(input),
     remove: (id) => store.remove(id),
     check: (id) => store.check(id),
@@ -473,17 +475,118 @@ function renderGrid() {
   $('#lastRunLine').textContent = state.lastRunAt ? `上次整体检查：${fmtDate(state.lastRunAt)}` : '尚未整体检查过（自动检查按需触发）';
 }
 
+function fmtCountdown(ms) {
+  if (ms == null) return '';
+  if (ms <= 0) return '可重置';
+  var s = Math.ceil(ms / 1000);
+  var h = Math.floor(s / 3600);
+  var m = Math.floor((s % 3600) / 60);
+  var sec = s % 60;
+  if (h > 0) return h + ' 小时 ' + m + ' 分';
+  if (m > 0) return m + ' 分 ' + sec + ' 秒';
+  return sec + ' 秒';
+}
+
+/** 用服务端 Date 校准后的“现在”，避免本机时钟偏移把倒计时算飞 */
+function quotaNow(rate) {
+  var fetched = Date.parse(rate && rate.fetchedAt) || Date.now();
+  var base = Date.parse(rate && rate.serverNow) || fetched;
+  return base + (Date.now() - fetched);
+}
+
+function rateCore() {
+  var rate = state.rate;
+  if (!rate) return null;
+  if (rate.core) return rate.core;
+  if (rate.remaining != null || rate.limit != null) return rate;   // 兼容旧后端
+  return null;
+}
+
 function renderHeader() {
-  const badge = $('#rateBadge');
-  if (state.rate) {
-    badge.textContent = `额度 ${state.rate.remaining}/${state.rate.limit}`;
-    badge.className = `badge badge-mono ${state.rate.remaining > 10 ? 'badge-clean' : 'badge-warn'}`;
-    badge.title = `GitHub API 剩余 ${state.rate.remaining}/${state.rate.limit}（${state.hasToken ? '已用 Token' : '未认证'}）${state.transport ? ` · 通道 ${state.transport}` : ''}`;
+  var badge = $('#rateBadge');
+  var core = rateCore();
+  if (core) {
+    var remaining = core.remaining == null ? '—' : core.remaining;
+    var limit = core.limit == null ? '—' : core.limit;
+    badge.textContent = 'API ' + remaining + '/' + limit;
+    var level = core.remaining === 0 ? 'badge-error' : (core.remaining != null && core.remaining <= 10 ? 'badge-warn' : 'badge-clean');
+    badge.className = 'badge badge-mono badge-btn ' + level;
+    var left = core.reset ? fmtCountdown(core.reset * 1000 - quotaNow(state.rate)) : '';
+    badge.title = 'GitHub API 剩余 ' + remaining + '/' + limit + (left ? ' · ' + left + '后重置' : '') + '（' + (state.hasToken ? 'Token' : '未认证') + '）';
   } else {
-    badge.textContent = state.hasToken ? '额度 —' : '未认证';
-    badge.title = '拿不到额度信息（可能是网络或限流）';
+    badge.textContent = state.hasToken ? 'API —' : 'API 未认证';
+    badge.className = 'badge badge-mono badge-btn badge-clean';
+    badge.title = '拿不到 GitHub API 额度（网络问题或 Token 无效）';
   }
 }
+
+function renderQuotaRows() {
+  var box = $('#quotaRows');
+  if (!box) return;
+  var rate = state.rate;
+  var updated = $('#quotaUpdated');
+  var scope = $('#quotaScope');
+  if (!rate || !rate.core) {
+    box.innerHTML = '<p class="hint is-error">拿不到额度信息：可能是网络问题，或 Token 无效（401）。</p>';
+    if (updated) updated.textContent = '—';
+    return;
+  }
+  if (scope) scope.textContent = rate.authenticated ? '按账号共享' : '按 IP 共享';
+  var defs = [
+    ['core', 'REST core', '项目检查'],
+    ['search', 'Search', '每分钟'],
+    ['graphql', 'GraphQL', '点数'],
+    ['code_search', 'Code search', '每分钟'],
+  ];
+  var html = '';
+  defs.forEach(function (def) {
+    var r = rate[def[0]];
+    if (!r) return;
+    var limit = r.limit == null ? '—' : r.limit;
+    var remaining = r.remaining == null ? '—' : r.remaining;
+    var used = r.used == null ? '—' : r.used;
+    if (r.limit === 0) {
+      html += '<div class="api-row" data-resource="' + def[0] + '">';
+      html += '<div class="api-row-head"><b>' + def[1] + '</b><span class="mono">未开通</span></div>';
+      html += '<div class="api-row-meta"><span>当前 Token / 匿名请求没有这个分桶</span><span>—</span></div>';
+      html += '</div>';
+      return;
+    }
+    var pct = (r.limit && r.used != null) ? Math.min(100, Math.round((r.used / r.limit) * 1000) / 10) : 0;
+    var level = r.remaining === 0 ? 'danger' : (r.remaining != null && r.limit && r.remaining / r.limit <= 0.1 ? 'warn' : '');
+    var resetMs = r.reset ? r.reset * 1000 - quotaNow(rate) : null;
+    var resetText = resetMs == null ? '无重置信息' : (resetMs <= 0 ? '已到重置时间' : fmtCountdown(resetMs) + '后重置');
+    html += '<div class="api-row" data-resource="' + def[0] + '">';
+    html += '<div class="api-row-head"><b>' + def[1] + '</b><span class="mono">剩 ' + remaining + ' / ' + limit + '</span></div>';
+    html += '<div class="api-bar" data-level="' + level + '"><span style="width:' + pct + '%"></span></div>';
+    html += '<div class="api-row-meta"><span>已用 ' + used + ' · ' + pct + '%</span><span>' + resetText + '</span></div>';
+    html += '</div>';
+  });
+  box.innerHTML = html;
+  if (updated) updated.textContent = '更新于 ' + fmtDate(rate.fetchedAt) + (rate.authenticated ? ' · Token' : ' · 未认证');
+}
+
+var quotaTimer = null;
+async function refreshQuota() {
+  try {
+    var data = await backend.rate();
+    if (data && data.rate) { state.rate = data.rate; renderHeader(); renderQuotaRows(); }
+  } catch { /* 保持旧值，界面会显示上次更新时间 */ }
+}
+
+function openQuotaDialog() {
+  renderQuotaRows();
+  var dialog = $('#quotaDialog');
+  if (!dialog.open) dialog.showModal();
+  clearInterval(quotaTimer);
+  quotaTimer = setInterval(renderQuotaRows, 1000);
+  refreshQuota();
+}
+
+$('#rateBadge').addEventListener('click', openQuotaDialog);
+$('#quotaClose').addEventListener('click', function () { $('#quotaDialog').close(); });
+$('#quotaRefresh').addEventListener('click', refreshQuota);
+$('#quotaDialog').addEventListener('close', function () { clearInterval(quotaTimer); quotaTimer = null; });
 
 function renderJob() {
   const job = state.job;
@@ -689,9 +792,10 @@ let confirmResolve = null;
 
 $('#settingsBtn').addEventListener('click', () => {
   $('#tokenInput').value = '';
-  $('#rateHint').textContent = (state.rate
-    ? `当前额度：${state.rate.remaining}/${state.rate.limit}（${state.hasToken ? '已用 Token' : '未认证，60 次/小时'}）`
-    : '拿不到额度信息，可能是网络问题。') + ` · 模式：${backend.label}${state.transport ? `（${state.transport}）` : ''}`;
+  var coreQuota = rateCore();
+  $('#rateHint').textContent = (coreQuota
+    ? `当前 GitHub API 额度：${coreQuota.remaining}/${coreQuota.limit}（${state.hasToken ? '已用 Token' : '未认证，60 次/小时'}）`
+    : '拿不到 GitHub API 额度信息，可能是网络问题或 Token 无效。') + ` · 模式：${backend.label}${state.transport ? `（${state.transport}）` : ''}`;
   const toggle = $('#notifyToggle');
   toggle.checked = notifyEnabled();
   toggle.disabled = !notifySupported();
@@ -747,10 +851,10 @@ function fmtBytes(n) {
 }
 
 function nodeQuotaText(view) {
-  if (!view || view.source === 'unknown') return { text: '未知', pct: null, title: '机场没有返回额度信息' };
+  if (!view || view.source === 'unknown') return { text: '未知', pct: null, title: '机场没有返回流量信息' };
   if (view.unlimited) return { text: '不限流量', pct: null, title: '订阅没有给总量（机场按不限量处理）' };
-  if (view.source === 'node') return { text: '剩 ' + fmtBytes(view.remaining) + ' / ' + fmtBytes(view.total), pct: view.percent, title: '机场在节点信息里提供的额度' };
-  if (view.source === 'estimate') return { text: '估算 · 剩 ' + fmtBytes(view.remaining), pct: view.percent, title: '整条订阅剩余额度 ÷ ' + view.share + ' 个节点（估算，不是机场按节点计量）' };
+  if (view.source === 'node') return { text: '剩 ' + fmtBytes(view.remaining) + ' / ' + fmtBytes(view.total), pct: view.percent, title: '机场在节点信息里提供的流量' };
+  if (view.source === 'estimate') return { text: '估算 · 剩 ' + fmtBytes(view.remaining), pct: view.percent, title: '整条订阅剩余流量 ÷ ' + view.share + ' 个节点（估算，不是机场按节点计量）' };
   return { text: '共用 · 剩 ' + fmtBytes(view.remaining), pct: view.percent, title: '整条订阅共用一个流量池' };
 }
 
@@ -779,7 +883,7 @@ function sortSubNodes(sub) {
 function subStatus(sub) {
   if (sub.error) return { cls: 'badge-error', text: '拉取失败', icon: 'circle-alert' };
   if (sub.quota && sub.quota.expired) return { cls: 'badge-warn', text: '已过期', icon: 'clock' };
-  if (sub.quota && !sub.quota.unlimited && sub.quota.percent >= 90) return { cls: 'badge-error', text: '额度将尽', icon: 'triangle-alert' };
+  if (sub.quota && !sub.quota.unlimited && sub.quota.percent >= 90) return { cls: 'badge-error', text: '流量将尽', icon: 'triangle-alert' };
   if (sub.nodes && sub.nodes.count > 0) return { cls: 'badge-clean', text: '已同步', icon: 'circle-check' };
   return { cls: 'badge-warn', text: '没有节点', icon: 'circle-alert' };
 }
@@ -791,7 +895,7 @@ function subCardHtml(sub) {
   var level = (q && !q.unlimited) ? (q.percent >= 90 ? 'danger' : q.percent >= 70 ? 'warn' : '') : '';
   var usedText = q
     ? (q.unlimited ? '已用 ' + fmtBytes(q.used) : '已用 ' + fmtBytes(q.used) + ' / ' + fmtBytes(q.total))
-    : '额度未知';
+    : '流量未知';
   var rightText = '';
   if (q) {
     rightText = q.unlimited ? '不限流量' : '剩 ' + fmtBytes(q.remaining);
@@ -824,8 +928,8 @@ function subCardHtml(sub) {
   var ranked = sortSubNodes(sub);
   if (ranked.length) {
     html += '<div class="node-table-wrap"><div class="node-scroll">';
-    html += '<table class="node-table"><caption class="sr-only">节点额度（只读）</caption>';
-    html += '<thead><tr><th scope="col">节点</th><th scope="col">额度</th></tr></thead><tbody>';
+    html += '<table class="node-table"><caption class="sr-only">节点流量（只读）</caption>';
+    html += '<thead><tr><th scope="col">节点</th><th scope="col">流量</th></tr></thead><tbody>';
     ranked.slice(0, 200).forEach(function (row) {
       var q = nodeQuotaText(row.view);
       var node = row.node;
@@ -838,7 +942,7 @@ function subCardHtml(sub) {
       html += '</div></td></tr>';
     });
     html += '</tbody></table></div></div>';
-    html += '<p class="node-note">额度来源：<b>共用</b> = 整条订阅的流量池；<b>估算</b> = 剩余额度 ÷ 节点数。两者都不是机场按节点计量。</p>';
+    html += '<p class="node-note">流量来源：<b>共用</b> = 整条订阅的流量池；<b>估算</b> = 剩余流量 ÷ 节点数。两者都不是机场按节点计量。</p>';
   }
   if (sub.error) html += '<div class="repo-error">' + esc(sub.error) + '</div>';
 
@@ -879,7 +983,7 @@ $('#nodeQuotaMode').addEventListener('change', async (ev) => {
     await backend.setNodeQuotaMode(mode);
     state.nodeQuotaMode = mode;
     renderSubs();
-    toast(mode === 'estimate' ? '已切换为均分估算（不是机场按节点计量）' : '已切换为整条订阅共用额度', 'info');
+    toast(mode === 'estimate' ? '已切换为均分估算（不是机场按节点计量）' : '已切换为整条订阅共用流量', 'info');
   } catch (e) {
     toast(e.message, 'error');
     ev.target.value = state.nodeQuotaMode;
@@ -1163,7 +1267,12 @@ async function renderUpdateBadge(force) {
   const automated = navigator.webdriver || /HeadlessChrome/i.test(navigator.userAgent);
   if (!automated && state.repos.length && Date.now() - lastAuto > 10 * 60 * 1000) {
     try { localStorage.setItem(AUTO_KEY, String(Date.now())); } catch { /* 忽略 */ }
-    runCheckAll({ automatic: true });
+    var coreQuota = rateCore();
+    if (coreQuota && coreQuota.remaining === 0) {
+      toast('GitHub API 额度为 0，已跳过启动检查（重置后自动恢复）', 'info');
+    } else {
+      runCheckAll({ automatic: true });
+    }
   }
   renderUpdateBadge().catch(() => {});
 
@@ -1173,6 +1282,6 @@ async function renderUpdateBadge(force) {
 
 // 供自动化验证脚本读取内部状态的测试钩子（只读，不改变行为）
 window.__guw = {
-  get state() { return { repos: state.repos, subscriptions: state.subscriptions, filter: state.filter, query: state.query, job: state.job, hasToken: state.hasToken, transport: state.transport, theme: document.documentElement.dataset.theme, backend: backend.kind }; },
+  get state() { return { repos: state.repos, subscriptions: state.subscriptions, rate: state.rate, filter: state.filter, query: state.query, job: state.job, hasToken: state.hasToken, transport: state.transport, theme: document.documentElement.dataset.theme, backend: backend.kind }; },
   icons,
 };

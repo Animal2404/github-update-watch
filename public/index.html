@@ -34,7 +34,7 @@
         <h1>GitHub 更新监测</h1>
         <div class="sub">自定义项目列表 · 检测新版本发布</div>
       </div>
-      <span class="badge badge-clean badge-mono" id="rateBadge" title="GitHub API 剩余额度">额度 —</span>
+      <button class="badge badge-clean badge-mono badge-btn" id="rateBadge" type="button" aria-haspopup="dialog" title="GitHub API 额度">API —</button>
     </div>
 
     <div class="header-actions">
@@ -95,18 +95,18 @@
     <section class="deck sub-deck" id="subDeck" aria-labelledby="subTitle">
       <div class="toolbar-row">
         <h2 class="deck-title" id="subTitle">节点订阅</h2>
-        <span class="muted-note" id="subSummary">导入机场订阅，查看流量额度与节点</span>
+        <span class="muted-note" id="subSummary">导入机场订阅，查看订阅流量与节点</span>
         <div class="sub-controls">
-          <label class="inline-control">节点额度
-            <select class="select" id="nodeQuotaMode" aria-label="节点额度口径">
+          <label class="inline-control">节点流量
+            <select class="select" id="nodeQuotaMode" aria-label="节点流量口径">
               <option value="shared">共用（真实）</option>
               <option value="estimate">均分（估算）</option>
             </select>
           </label>
           <label class="inline-control">排序
             <select class="select" id="nodeSort" aria-label="节点排序">
-              <option value="quota-desc">额度高→低</option>
-              <option value="quota-asc">额度低→高</option>
+              <option value="quota-desc">流量高→低</option>
+              <option value="quota-asc">流量低→高</option>
               <option value="name">名称</option>
               <option value="protocol">协议</option>
             </select>
@@ -125,7 +125,7 @@
         </div>
         <button class="btn btn-primary" id="subAddBtn" type="submit">导入</button>
       </form>
-      <p class="sub-purpose"><b>这个面板只做两件事</b>：读取订阅的总流量 / 到期时间，并统计节点数量。它不是代理客户端——选节点、测延迟、连线路请用 FlClash 或 mihomo。额度只有机场在响应头 <code>subscription-userinfo</code> 里返回时才有。节点表会标出来源：<b>共用</b> = 整条订阅一个池（真实）；<b>估算</b> = 剩余额度 ÷ 节点数（本应用换算，不是机场按节点计量）；没有数据就显示“未知”。</p>
+      <p class="sub-purpose"><b>这个面板只做两件事</b>：读取订阅的总流量 / 到期时间，并统计节点数量。它不是代理客户端——选节点、测延迟、连线路请用 FlClash 或 mihomo。订阅流量只有机场在响应头 <code>subscription-userinfo</code> 里返回时才有。节点表会标出来源：<b>共用</b> = 整条订阅一个流量池（真实）；<b>估算</b> = 剩余流量 ÷ 节点数（本应用换算，不是机场按节点计量）；没有数据就显示“未知”。</p>
       <p class="hint" id="subHint">链接只存在本机（桌面端加密落盘），界面只显示脱敏形式。</p>
       <div id="subList" class="sub-list"></div>
     </section>
@@ -137,6 +137,25 @@
     </div>
   </main>
 </div>
+
+<!-- GitHub API 额度（不是订阅流量） -->
+<dialog id="quotaDialog" aria-labelledby="quotaTitle">
+  <div class="dialog-body">
+    <div class="dialog-head">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path data-icon="activity"></path></svg>
+      <h2 id="quotaTitle">GitHub API 额度</h2>
+      <span class="badge badge-clean badge-mono quota-scope" id="quotaScope">按账号共享</span>
+    </div>
+    <p class="hint">这是 GitHub 的请求额度，不是订阅流量。按账号/IP 计数，同一账号下的所有项目检查共享这一个池。</p>
+    <div class="api-list" id="quotaRows"></div>
+    <p class="hint">未认证 60 次/小时；填 Token 可到 5000 次/小时。剩余为 0 时，重置前检查都会失败。403 + Retry-After 属于次级限流（并发），不是额度用尽。</p>
+    <div class="dialog-actions">
+      <span class="ver-line" id="quotaUpdated">—</span>
+      <button class="btn btn-outline btn-sm" id="quotaRefresh" type="button">刷新</button>
+      <button class="btn btn-primary btn-sm" id="quotaClose" type="button">关闭</button>
+    </div>
+  </div>
+</dialog>
 
 <div class="toasts" id="toasts" role="status" aria-live="polite" aria-atomic="false"></div>
 

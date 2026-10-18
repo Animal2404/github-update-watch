@@ -203,10 +203,45 @@ export function createGithub({ fetchText }) {
     };
   }
 
-  async function rate(token = '') {
+  /**
+   * GitHub API 额度（不是订阅流量）。
+   * 来源：GET /rate_limit（该调用本身不计入额度）。返回 core/search/graphql 等分桶，
+   * 并用响应头 Date 校准倒计时，避免本机时钟偏移导致"已重置"算错。
+   */
+  let rateCache = { at: 0, key: '', value: null };
+  async function rate(token = '', { fresh = false } = {}) {
+    const key = token ? 'token' : 'anon';
+    if (!fresh && rateCache.key === key && Date.now() - rateCache.at < 60 * 1000) return rateCache.value;
     try {
-      const r = await gh('/rate_limit', { token });
-      return r?.resources?.core || null;
+      const headers = { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' };
+      if (token) headers.authorization = `Bearer ${token}`;
+      const res = await fetchText('https://api.github.com/rate_limit', headers);
+      const body = res.body ?? (() => { try { return JSON.parse(res.text); } catch { return null; } })();
+      if (!body || !body.resources) return null;
+      const normalize = (name, value) => {
+        if (!value || typeof value !== 'object') return null;
+        const limit = Number.isFinite(value.limit) ? value.limit : null;
+        const remaining = Number.isFinite(value.remaining) ? value.remaining : null;
+        const used = Number.isFinite(value.used) ? value.used
+          : (limit != null && remaining != null ? Math.max(0, limit - remaining) : null);
+        const reset = Number.isFinite(value.reset) ? value.reset : 0;
+        return { resource: name, limit, remaining, used, reset, resetAt: reset ? new Date(reset * 1000).toISOString() : null };
+      };
+      const dateHeader = res.headers && (res.headers.date || res.headers.Date);
+      const serverNow = dateHeader && !Number.isNaN(Date.parse(dateHeader))
+        ? new Date(dateHeader).toISOString()
+        : new Date().toISOString();
+      const out = {
+        core: normalize('core', body.resources.core),
+        search: normalize('search', body.resources.search),
+        graphql: normalize('graphql', body.resources.graphql),
+        code_search: normalize('code_search', body.resources.code_search),
+        fetchedAt: new Date().toISOString(),
+        serverNow,
+        authenticated: !!token,
+      };
+      if (out.core) rateCache = { at: Date.now(), key, value: out };
+      return out.core ? out : null;
     } catch { return null; }
   }
 

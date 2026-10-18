@@ -296,6 +296,9 @@ html { scrollbar-gutter: stable; }
 .badge-error { background: color-mix(in srgb, var(--destructive) 12%, transparent); color: var(--destructive-text); border-color: color-mix(in srgb, var(--destructive) 30%, transparent); }
 .badge-warn { background: color-mix(in srgb, var(--warning) 14%, transparent); color: var(--warning-text); border-color: color-mix(in srgb, var(--warning) 28%, transparent); }
 .badge-mono { font-family: var(--font-mono); font-weight: 500; }
+.badge-btn { font: inherit; cursor: pointer; }
+.badge-btn:hover { border-color: var(--ring); }
+.badge-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 
 /* ---------------------------------------------------------------- 网格 / 项目卡 */
 .grid { display: grid; gap: .8rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); align-items: start; grid-auto-rows: min-content; }
@@ -447,6 +450,18 @@ dialog::backdrop { background: var(--overlay); }
 .dialog-head h2 { font-size: .95rem; font-weight: 600; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: .45rem; flex-wrap: wrap; }
 .dialog p { font-size: .82rem; color: var(--muted-foreground); }
+#quotaDialog { width: min(94vw, 540px); }
+.api-list { display: grid; gap: .6rem; }
+.api-row { border: 1px solid var(--border); border-radius: 8px; padding: .55rem .65rem; display: grid; gap: .3rem; }
+.api-row-head { display: flex; justify-content: space-between; gap: .5rem; align-items: baseline; font-size: .8rem; }
+.api-row-head b { font-weight: 600; }
+.api-row-head .mono { font-size: .74rem; color: var(--muted-foreground); }
+.api-bar { height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--foreground) 8%, transparent); overflow: hidden; }
+.api-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--foreground); }
+.api-bar[data-level="warn"] > span { background: var(--warning); }
+.api-bar[data-level="danger"] > span { background: var(--destructive); }
+.api-row-meta { display: flex; justify-content: space-between; gap: .5rem; font-size: .7rem; color: var(--muted-foreground); }
+.quota-scope { font-weight: 500; }
 
 /* ---------------------------------------------------------------- 节点订阅 */
 .sub-deck {

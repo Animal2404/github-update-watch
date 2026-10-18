@@ -4,7 +4,7 @@ import {
   subId, normalizeSubUrl, maskUrl, hostOf, headerValue,
   parseUserInfo, quotaView, parseSubscriptionBody, publicSubscription, nodeQuotaView,
 } from '../public/subs-core.js';
-import { createStore } from '../public/github-core.js';
+import { createStore, createGithub } from '../public/github-core.js';
 
 const URI_LIST = [
   'ss://YWVzLTI1Ni1nY206cGFzcw@1.1.1.1:443#%E9%A6%99%E6%B8%AF%2001',
@@ -174,4 +174,35 @@ test('nodes quota mode：默认 shared，estimate 可持久化，非法值回落
   assert.equal(persisted.settings.nodeQuotaMode, 'estimate');
   store.setNodeQuotaMode('bogus');
   assert.equal(store.getState().nodeQuotaMode, 'shared');
+});
+
+
+test('GitHub API 额度：core/search/graphql 分桶 + 服务端 Date 校准', async () => {
+  const body = { resources: {
+    core: { limit: 60, remaining: 0, used: 60, reset: 1793000000 },
+    search: { limit: 10, remaining: 9, used: 1, reset: 1793000060 },
+    graphql: { limit: 0, remaining: 0, used: 0, reset: 0 },
+  } };
+  const date = 'Mon, 19 Oct 2026 17:00:00 GMT';
+  const gh = createGithub({ fetchText: async () => ({ status: 200, text: JSON.stringify(body), headers: { date } }) });
+  const rate = await gh.rate('');
+  assert.equal(rate.core.limit, 60);
+  assert.equal(rate.core.remaining, 0);
+  assert.equal(rate.core.used, 60);
+  assert.equal(rate.search.limit, 10);
+  assert.equal(rate.graphql.limit, 0);
+  assert.equal(rate.authenticated, false);
+  assert.equal(rate.serverNow, new Date(date).toISOString());
+
+  const noDate = createGithub({ fetchText: async () => ({ status: 200, text: JSON.stringify(body), headers: {} }) });
+  const r2 = await noDate.rate('t');
+  assert.equal(r2.authenticated, true);
+  assert.ok(r2.serverNow, '没有 Date 头时也必须给出 serverNow 兜底');
+});
+
+test('GitHub API 额度：没有 core 或请求失败时返回 null（不伪造 0）', async () => {
+  const gh = createGithub({ fetchText: async () => ({ status: 200, text: JSON.stringify({ resources: { search: { limit: 10, remaining: 1, used: 9, reset: 1 } } }), headers: {} }) });
+  assert.equal(await gh.rate(''), null);
+  const down = createGithub({ fetchText: async () => { throw new Error('network'); } });
+  assert.equal(await down.rate(''), null);
 });

@@ -233,6 +233,9 @@ export function createServer() {
       if (!p.startsWith('/api/')) return serveStatic(req, res);
 
       if (req.method === 'GET' && p === '/api/ping') return sendJson(res, 200, { ok: true, mode: 'server' });
+      if (req.method === 'GET' && p === '/api/rate') {
+        return sendJson(res, 200, { rate: await github.rate(store.settings.token, { fresh: true }) });
+      }
       if (req.method === 'GET' && p === '/api/state') {
         const rate = await github.rate(store.settings.token);
         return sendJson(res, 200, store.getState({ transport, rate }));

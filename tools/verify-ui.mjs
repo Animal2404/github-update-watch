@@ -260,6 +260,33 @@ try {
     return '内联错误 + aria-invalid 生效';
   });
 
+  await check('GitHub API 额度：点 badge 打开分桶弹窗，显示剩余与重置时间', async () => {
+    await cdp.eval("document.querySelector('#rateBadge').click()");
+    await sleep(900);
+    const info = await cdp.eval(`(() => {
+      const d = document.querySelector('#quotaDialog');
+      return {
+        open: d.open,
+        scope: d.querySelector('#quotaScope').textContent,
+        updated: d.querySelector('#quotaUpdated').textContent,
+        rows: [...d.querySelectorAll('.api-row')].map((r) => ({ key: r.dataset.resource, text: r.textContent })),
+        text: d.textContent,
+      };
+    })()`);
+    assert(info.open, '额度 dialog 没打开');
+    if (!info.rows.length) {
+      assert(/拿不到额度|Token 无效/.test(info.text), '没有额度数据时应显示错误态');
+      await cdp.eval("document.querySelector('#quotaClose').click()");
+      return '额度不可用（网络/Token），错误态正常';
+    }
+    assert(info.rows.some((r) => r.key === 'core'), '缺少 REST core 行');
+    assert(/剩\s/.test(info.rows[0].text), '额度行缺少剩余数：' + info.rows[0].text);
+    assert(/重置|已到/.test(info.rows[0].text), '额度行缺少重置时间：' + info.rows[0].text);
+    assert(/按 (账号|IP) 共享/.test(info.scope), '共享范围文案不对：' + info.scope);
+    await cdp.eval("document.querySelector('#quotaClose').click()");
+    return info.rows[0].text.replace(/\s+/g, ' ').slice(0, 60) + ' · ' + info.scope;
+  });
+
   await check('订阅表单：空链接会内联报错（不会静默失败）', async () => {
     await cdp.eval('(() => { const i = document.querySelector("#subInput"); i.value = ""; document.querySelector("#subForm").requestSubmit(); return true; })()');
     await sleep(220);
