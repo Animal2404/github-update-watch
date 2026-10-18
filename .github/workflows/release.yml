@@ -88,6 +88,16 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: 失败时输出可读的编译错误（公开 annotation，免登录诊断）
+        if: failure()
+        run: |
+          LOG="$RUNNER_TEMP/gradle-build.log"
+          if [ -f "$LOG" ]; then
+            grep -nE "(^e: |error:|FAILURE:|What went wrong|Caused by:)" "$LOG" | head -n 40 | while IFS= read -r line; do
+              clean=$(printf '%s' "$line" | tr -d '%' | cut -c1-400)
+              echo "::error title=Gradle 编译错误::$clean"
+            done
+          fi
       - name: 打印 APK 签名指纹（升级前核对用）
         run: |
           APK=$(find android/app/build/outputs/apk -name '*.apk' | head -1)
