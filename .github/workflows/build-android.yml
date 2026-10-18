@@ -59,7 +59,20 @@ jobs:
 
       - name: 编译 debug 与 release APK
         working-directory: android
-        run: gradle assembleDebug assembleRelease --no-daemon --stacktrace
+        run: |
+          set -o pipefail
+          gradle assembleDebug assembleRelease --no-daemon --stacktrace 2>&1 | tee "$RUNNER_TEMP/gradle-build.log"
+
+      - name: 失败时把 Gradle 错误写进摘要
+        if: failure()
+        run: |
+          {
+            echo '### Gradle 构建失败（末尾 80 行）'
+            echo '```'
+            tail -n 80 "$RUNNER_TEMP/gradle-build.log" 2>/dev/null || echo '(没有日志文件)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
 
       - name: 打印 APK 签名指纹（升级前核对用）
         run: |

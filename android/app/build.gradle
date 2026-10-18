@@ -9,10 +9,12 @@ plugins {
 // 以前写死 versionCode 1 / versionName '1.0.0'：每次发版 APK 都自称 1.0.0，
 // 覆盖安装时系统可能按"同版本/降级"处理。现在从仓库根 package.json 推导：
 //   1.1.0 → versionName 1.1.0 / versionCode 10100（major*10000 + minor*100 + patch）
-def pkgJson = new JsonSlurper().parseText(file("$rootDir/../package.json").text)
+def pkgJson = new JsonSlurper().parseText(file("${rootDir}/../package.json").text)
 def gwVersionName = pkgJson.version.toString()
-def (vMajor, vMinor, vPatch) = gwVersionName.tokenize('.').collect { it.isInteger() ? it.toInteger() : 0 }
-def gwVersionCode = vMajor * 10000 + vMinor * 100 + vPatch
+def versionMatcher = gwVersionName =~ /^(\d+)\.(\d+)\.(\d+)/
+def gwVersionCode = versionMatcher.matches()
+    ? (versionMatcher.group(1) as int) * 10000 + (versionMatcher.group(2) as int) * 100 + (versionMatcher.group(3) as int)
+    : 1
 
 // ---------------------------------------------------------------- 稳定签名
 // 优先级：环境变量（CI Secrets）> android/keystore.properties（本地，已 gitignore）> debug 签名。
@@ -21,16 +23,19 @@ def gwVersionCode = vMajor * 10000 + vMinor * 100 + vPatch
 // 一律报"签名不一致，无法覆盖安装"。
 def keystoreProps = new Properties()
 def keystorePropsFile = file("${projectDir}/keystore.properties")
-if (keystorePropsFile.exists()) keystorePropsFile.withInputStream { keystoreProps.load(it) }
-def propEnv = { String key, String envName ->
-    def v = System.getenv(envName)
-    if (v == null || v.isEmpty()) v = keystoreProps.getProperty(key)
-    return v == null || v.isEmpty() ? null : v
+if (keystorePropsFile.exists()) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
 }
-def stableStorePath = propEnv('storeFile', 'ANDROID_KEYSTORE_PATH')
-def stableStorePass = propEnv('storePassword', 'ANDROID_KEYSTORE_PASSWORD')
-def stableKeyAlias = propEnv('keyAlias', 'ANDROID_KEY_ALIAS')
-def stableKeyPass = propEnv('keyPassword', 'ANDROID_KEY_PASSWORD')
+def readSetting = { String propKey, String envName ->
+    def fromEnv = System.getenv(envName)
+    if (fromEnv != null && !fromEnv.isEmpty()) return fromEnv
+    def fromFile = keystoreProps.getProperty(propKey)
+    return (fromFile != null && !fromFile.isEmpty()) ? fromFile : null
+}
+def stableStorePath = readSetting('storeFile', 'ANDROID_KEYSTORE_PATH')
+def stableStorePass = readSetting('storePassword', 'ANDROID_KEYSTORE_PASSWORD')
+def stableKeyAlias = readSetting('keyAlias', 'ANDROID_KEY_ALIAS')
+def stableKeyPass = readSetting('keyPassword', 'ANDROID_KEY_PASSWORD')
 def hasStableKey = stableStorePath != null && stableStorePass != null && stableKeyAlias != null
 
 android {
@@ -41,17 +46,17 @@ android {
         applicationId 'com.guw.watch'
         minSdk 24
         targetSdk 34
-        versionCode gwVersionCode
-        versionName gwVersionName
+        versionCode = gwVersionCode
+        versionName = gwVersionName
     }
 
     signingConfigs {
         if (hasStableKey) {
-            stable {
-                storeFile file(stableStorePath)
-                storePassword stableStorePass
-                keyAlias stableKeyAlias
-                keyPassword(stableKeyPass ?: stableStorePass)
+            release {
+                storeFile = file(stableStorePath)
+                storePassword = stableStorePass
+                keyAlias = stableKeyAlias
+                keyPassword = (stableKeyPass != null ? stableKeyPass : stableStorePass)
             }
         }
     }
@@ -63,7 +68,7 @@ android {
         release {
             minifyEnabled false
             // 有固定密钥就用它；否则退回 debug（本地开发仍可用，但 CI 发版必须配 Secrets）
-            signingConfig hasStableKey ? signingConfigs.stable : signingConfigs.debug
+            signingConfig = hasStableKey ? signingConfigs.release : signingConfigs.debug
         }
     }
 
@@ -96,17 +101,18 @@ tasks.register('checkWebAssets') {
 
 tasks.named('preBuild') { dependsOn 'checkWebAssets' }
 
-// 构建时把实际使用的版本/签名来源打到日志里，避免"以为换成固定 key 了其实没换"
+// 构建时把实际使用的版本/签名来源打到日志里，避免"以为换成固定 key 了其实没换"。
+// 用 matching().configureEach 而不是 tasks.named()：AGP 的 assemble* 任务在配置期后段才注册，
+// 直接 named() 会抛 UnknownTaskException（这次 CI 挂掉的原因之一）。
 tasks.register('printSigningInfo') {
     doLast {
         println "GUW_VERSION name=${gwVersionName} code=${gwVersionCode}"
-        println hasStableKey
+        println(hasStableKey
             ? "GUW_SIGNING stable (${stableStorePath}, alias=${stableKeyAlias})"
-            : "GUW_SIGNING debug-fallback（未配置 ANDROID_KEYSTORE_PATH / keystore.properties）"
+            : "GUW_SIGNING debug-fallback（未配置 ANDROID_KEYSTORE_PATH / keystore.properties）")
     }
 }
-
-tasks.named('assembleRelease') { dependsOn 'printSigningInfo' }
+tasks.matching { it.name == 'assembleRelease' }.configureEach { dependsOn 'printSigningInfo' }
 
 dependencies {
     implementation 'androidx.webkit:webkit:1.11.0'
