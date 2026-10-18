@@ -8,7 +8,7 @@
  */
 import { createMorph } from './vendor/morphicons/dom.js';
 import { icons } from './vendor/icons.js';
-import { createGithub, createStore } from './github-core.js';
+import { createGithub, createStore, esc } from './github-core.js';
 
 // ---------------------------------------------------------------- 后端选择
 // 桌面版：页面由 server.mjs 提供，走 /api/*（Node 侧有 curl 代理退让链 + 磁盘存储）
@@ -35,6 +35,7 @@ const httpBackend = {
   remove: (id) => api(`/api/repos/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   check: (id) => api(`/api/repos/${encodeURIComponent(id)}/check`, { method: 'POST' }),
   ack: (id) => api(`/api/repos/${encodeURIComponent(id)}/ack`, { method: 'POST' }),
+  reset: (id) => api(`/api/repos/${encodeURIComponent(id)}/reset`, { method: 'POST' }),
   releases: (id) => api(`/api/repos/${encodeURIComponent(id)}/releases`),
   checkAll: () => api('/api/check-all', { method: 'POST' }),
   setToken: (token) => api('/api/settings', { method: 'POST', body: { token } }),
@@ -70,6 +71,7 @@ const directBackend = (() => {
     remove: (id) => store.remove(id),
     check: (id) => store.check(id),
     ack: (id) => store.ack(id),
+    reset: (id) => store.reset(id),
     releases: (id) => store.releases(id),
     checkAll: async () => { store.checkAll().catch(() => {}); return { started: store.repos.length }; },
     setToken: (token) => store.setToken(token),
@@ -181,7 +183,7 @@ const statusOf = (r) => (r.error ? 'error' : r.status);
 
 // ---------------------------------------------------------------- 卡片
 function cardSignature(r) {
-  return JSON.stringify([r.status, r.error, r.baseline, r.latest?.tag, r.stars, r.description, r.lastCheckedAt, r.archived, r.canonical, r.renamedFrom, r.url]);
+  return JSON.stringify([r.status, r.error, r.baseline, r.latest?.tag, r.latest?.url, r.releaseSource, r.stars, r.description, r.lastCheckedAt, r.archived, r.canonical, r.renamedFrom, r.url]);
 }
 function createCard(r) {
   const el = document.createElement('article');
@@ -191,7 +193,7 @@ function createCard(r) {
     <div class="repo-head">
       ${iconSvg('folder-open', 'icon icon-lg')}
       <div class="repo-title">
-        <h3><a href="${r.url}" target="_blank" rel="noreferrer noopener" data-testid="repo-link">${r.canonical || `${r.owner}/${r.repo}`}</a></h3>
+        <h3><a href="${esc(r.url)}" target="_blank" rel="noreferrer noopener" data-testid="repo-link">${esc(r.canonical || `${r.owner}/${r.repo}`)}</a></h3>
         <div class="rename" data-field="rename" hidden></div>
       </div>
       <span class="badge" data-field="status"></span>
@@ -201,25 +203,42 @@ function createCard(r) {
     <div class="versions" data-field="versions"></div>
     <div class="repo-error" data-field="error" hidden></div>
     <div class="releases" data-field="releases" hidden></div>
+    <!-- 一行动作：主操作在左，低频/危险操作收进右侧「⋯」，卡片里不再挤六个按钮 -->
     <div class="repo-actions">
-      <button class="btn btn-sm btn-outline" type="button" data-action="check">
-        ${iconSvg('refresh-cw', 'icon icon-sm')}<span>检查</span>
-      </button>
-      <button class="btn btn-sm btn-ghost" type="button" data-action="releases" aria-expanded="false">
-        ${iconSvg('chevron-down', 'icon icon-sm')}<span>版本历史</span>
-      </button>
-      <button class="btn btn-sm btn-ghost" type="button" data-action="ack">
-        ${iconSvg('check-check', 'icon icon-sm')}<span>标记已读</span>
-      </button>
-      <a class="btn btn-sm btn-ghost" data-action="release-link" target="_blank" rel="noreferrer noopener" hidden>
-        ${iconSvg('external-link', 'icon icon-sm')}<span>Release</span>
-      </a>
-      <button class="btn btn-sm btn-ghost btn-icon" type="button" data-action="open-repo" aria-label="在浏览器打开仓库">
-        ${iconSvg('arrow-up-right', 'icon icon-sm')}
-      </button>
-      <button class="btn btn-sm btn-danger btn-icon" type="button" data-action="delete" aria-label="删除项目">
-        ${iconSvg('trash-2', 'icon icon-sm')}
-      </button>
+      <div class="actions-left">
+        <button class="btn btn-sm btn-outline" type="button" data-action="check">
+          ${iconSvg('refresh-cw', 'icon icon-sm')}<span>检查</span>
+        </button>
+        <button class="btn btn-sm btn-ghost" type="button" data-action="releases" aria-expanded="false">
+          ${iconSvg('chevron-down', 'icon icon-sm')}<span>版本历史</span>
+        </button>
+        <button class="btn btn-sm btn-ghost btn-ack" type="button" data-action="ack" hidden>
+          ${iconSvg('check-check', 'icon icon-sm')}<span>标记已读</span>
+        </button>
+      </div>
+      <div class="actions-right">
+        <div class="menu-wrap">
+          <button class="btn btn-sm btn-ghost btn-icon" type="button" data-action="menu"
+                  aria-haspopup="menu" aria-expanded="false" aria-label="更多操作" title="更多操作">
+            ${iconSvg('ellipsis', 'icon icon-sm')}
+          </button>
+          <div class="menu" data-field="menu" role="menu" aria-label="更多操作" hidden>
+            <a class="menu-item" role="menuitem" data-action="release-link" target="_blank" rel="noreferrer noopener" hidden>
+              ${iconSvg('external-link', 'icon icon-sm')}<span data-field="release-label">打开最新版本</span>
+            </a>
+            <button class="menu-item" role="menuitem" type="button" data-action="open-repo">
+              ${iconSvg('arrow-up-right', 'icon icon-sm')}<span>在浏览器打开仓库</span>
+            </button>
+            <button class="menu-item" role="menuitem" type="button" data-action="reset">
+              ${iconSvg('rotate-ccw', 'icon icon-sm')}<span>重置基线</span>
+            </button>
+            <div class="menu-sep" role="separator"></div>
+            <button class="menu-item menu-item-danger" role="menuitem" type="button" data-action="delete">
+              ${iconSvg('trash-2', 'icon icon-sm')}<span>删除项目</span>
+            </button>
+          </div>
+        </div>
+      </div>
     </div>`;
   initAllIcons(el);
   updateCard(el, r, { fresh: true });
@@ -248,24 +267,31 @@ function updateCard(el, r, { fresh = false } = {}) {
   desc.textContent = r.description || '';
 
   const meta = [];
-  if (r.archived) meta.push(`<span class="item" style="color:var(--warning)">${iconSvg('triangle-alert', 'icon icon-sm')}仓库已归档</span>`);
+  if (r.archived) meta.push(`<span class="item archived">${iconSvg('triangle-alert', 'icon icon-sm')}仓库已归档</span>`);
   if (r.stars != null) meta.push(`<span class="item">${iconSvg('star', 'icon icon-sm')}<span class="mono" data-testid="stars">${fmtStars(r.stars)}</span></span>`);
   if (r.latest?.publishedAt) meta.push(`<span class="item">${iconSvg('clock', 'icon icon-sm')}发布 ${fmtDate(r.latest.publishedAt)}</span>`);
   meta.push(`<span class="item">检查 ${fmtDate(r.lastCheckedAt)}</span>`);
+  // 版本来源：只有 tags 兜底才值得一提（说明仓库没有正式 Release），不刷"releases"这种默认值
+  if (r.releaseSource === 'tags') meta.push(`<span class="item source" title="该仓库没有正式 Release，版本取自 git tag">tag 兜底</span>`);
   el.querySelector('[data-field="meta"]').innerHTML = meta.join('');
   initAllIcons(el.querySelector('[data-field="meta"]'));
 
   const versions = el.querySelector('[data-field="versions"]');
+  const latestUrl = r.latest?.url || '';
+  const sourceName = r.releaseSource === 'tags' ? 'Tag' : 'Release';
+  // 版本号本身就是最自然的入口：点最新版本 = 打开那一版。不用再额外占一个 "Release" 按钮的位置。
+  const latestHtml = (extraCls) => latestUrl
+    ? `<a class="tag tag-link ${extraCls}" data-testid="latest" href="${esc(latestUrl)}" target="_blank" rel="noreferrer noopener" title="打开最新 ${sourceName} 页">${esc(r.latest.tag)}</a>`
+    : `<span class="tag ${extraCls}" data-testid="latest">${esc(r.latest.tag)}</span>`;
   if (r.baseline && r.latest) {
-    const changed = statusOf(r) === 'update';
-    // 没有更新时不画 "v1 → v1" 这种同值箭头（看着像有变化，其实是噪音）
+    // 用记录里的状态（r.status）而不是 statusOf：一次检查失败不该把"有新版本"的箭头藏起来，
+    // 那会让卡片同时出现「检查失败」和「已是最新」两个互相矛盾的说法。
+    const changed = r.status === 'update';
     versions.innerHTML = changed
-      ? `<span class="tag" data-testid="baseline">${r.baseline}</span><span class="arrow">→</span>
-         <span class="tag tag-new" data-testid="latest">${r.latest.tag}</span>
-         <span class="muted-note">新版本待确认</span>`
-      : `<span class="tag" data-testid="baseline">${r.baseline}</span><span class="muted-note">已记录为基线</span>`;
+      ? `<span class="tag" data-testid="baseline">${esc(r.baseline)}</span><span class="arrow" aria-hidden="true">→</span>${latestHtml('tag-new')}<span class="muted-note">待确认</span>`
+      : `<span class="tag" data-testid="baseline">${esc(r.baseline)}</span><span class="muted-note">已是最新</span>`;
   } else if (r.latest) {
-    versions.innerHTML = `<span class="tag" data-testid="latest">${r.latest.tag}</span><span class="muted-note">未记录基线</span>`;
+    versions.innerHTML = `${latestHtml('')}<span class="muted-note">未记录基线</span>`;
   } else {
     versions.innerHTML = '';
   }
@@ -274,15 +300,73 @@ function updateCard(el, r, { fresh = false } = {}) {
   err.hidden = !r.error;
   err.textContent = r.error || '';
 
+  // 「标记已读」只在真的有新版本时出现：没更新时它本来就是禁用态，留着只是噪音
   const ackBtn = el.querySelector('[data-action="ack"]');
-  ackBtn.disabled = statusOf(r) !== 'update';
-  ackBtn.title = ackBtn.disabled ? '当前没有待确认的新版本' : `把 ${r.latest?.tag || ''} 记为已读`;
+  const canAck = statusOf(r) === 'update';
+  ackBtn.hidden = !canAck;
+  ackBtn.disabled = !canAck;
+  ackBtn.title = canAck ? `把 ${r.latest?.tag || ''} 记为已读` : '当前没有待确认的新版本';
 
-  const link = el.querySelector('[data-action="release-link"]');
-  if (r.latest?.url) { link.href = r.latest.url; link.hidden = false; } else { link.hidden = true; }
+  // 「⋯」菜单里的导航项 / 重置基线
+  const menuLink = el.querySelector('[data-action="release-link"]');
+  if (latestUrl) {
+    menuLink.href = latestUrl;
+    menuLink.hidden = false;
+    el.querySelector('[data-field="release-label"]').textContent = r.releaseSource === 'tags' ? '打开 Tag 页面' : '打开最新 Release';
+  } else {
+    menuLink.hidden = true;
+  }
+  el.querySelector('[data-action="reset"]').hidden = !r.baseline;
 
   if (fresh) el.style.animationDelay = `${Math.min(cards.size, 8) * 45}ms`;
 }
+
+// ---------------------------------------------------------------- 卡片「更多」菜单
+// 单选可用：同时只开一个；Escape 关闭并把焦点还给触发按钮；外部 pointerdown 关闭。
+let openMenu = null;
+
+function closeMenu({ restoreFocus = false } = {}) {
+  if (!openMenu) return;
+  const { menu, trigger } = openMenu;
+  menu.hidden = true;
+  trigger.setAttribute('aria-expanded', 'false');
+  openMenu = null;
+  if (restoreFocus) trigger.focus();
+}
+
+function toggleMenu(card) {
+  const trigger = card.querySelector('[data-action="menu"]');
+  const menu = card.querySelector('[data-field="menu"]');
+  if (!trigger || !menu) return;
+  if (openMenu?.menu === menu) return closeMenu({ restoreFocus: true });
+  closeMenu();
+  menu.hidden = false;
+  trigger.setAttribute('aria-expanded', 'true');
+  openMenu = { menu, trigger };
+  menu.querySelector('.menu-item:not([hidden])')?.focus();
+}
+
+function menuItems() {
+  return openMenu ? [...openMenu.menu.querySelectorAll('.menu-item:not([hidden])')] : [];
+}
+
+document.addEventListener('pointerdown', (ev) => {
+  if (!openMenu) return;
+  if (openMenu.menu.contains(ev.target) || openMenu.trigger.contains(ev.target)) return;
+  closeMenu();
+});
+
+document.addEventListener('keydown', (ev) => {
+  if (!openMenu) return;
+  const items = menuItems();
+  const i = items.indexOf(document.activeElement);
+  if (ev.key === 'Escape') { ev.preventDefault(); closeMenu({ restoreFocus: true }); }
+  else if (ev.key === 'Tab') { closeMenu(); }
+  else if (ev.key === 'ArrowDown') { ev.preventDefault(); items[(i + 1) % items.length]?.focus(); }
+  else if (ev.key === 'ArrowUp') { ev.preventDefault(); items[(i - 1 + items.length) % items.length]?.focus(); }
+  else if (ev.key === 'Home') { ev.preventDefault(); items[0]?.focus(); }
+  else if (ev.key === 'End') { ev.preventDefault(); items.at(-1)?.focus(); }
+});
 
 function renderGrid() {
   // 首屏骨架屏用完必须清掉，否则会和真实卡片叠在一起（截图里露出来过）
@@ -314,6 +398,7 @@ function renderGrid() {
     entry.el.style.order = String(i);
   });
   for (const [id, entry] of cards) if (!seen.has(id)) { entry.el.remove(); cards.delete(id); }
+  if (openMenu && !openMenu.menu.isConnected) openMenu = null;
 
   const total = state.repos.length;
   const counts = { all: total, update: 0, clean: 0, error: 0 };
@@ -460,6 +545,9 @@ $('#checkAllBtn').addEventListener('click', async () => {
 
 // ---------------------------------------------------------------- 交互：卡片按钮（事件委托）
 grid.addEventListener('click', async (ev) => {
+  // 任何真实链接（仓库名 / 版本 tag / 菜单里的导航项）都交给浏览器默认行为。
+  // 这里以前没有这道闸：点「Release」会掉进下面的 check/ack 分支，顺手把基线推进了（静默标记已读）。
+  if (ev.target.closest('a[href]')) { closeMenu(); return; }
   const btn = ev.target.closest('[data-action]');
   if (!btn) return;
   const card = ev.target.closest('.repo-card');
@@ -469,16 +557,30 @@ grid.addEventListener('click', async (ev) => {
   const action = btn.dataset.action;
   const svg = btn.querySelector('svg');
 
+  if (action === 'menu') { toggleMenu(card); return; }
+  closeMenu();
+
   if (action === 'open-repo') { window.open(repo.url, '_blank', 'noopener'); return; }
 
   if (action === 'delete') {
-    const ok = await confirmDialog(`确定要从监测列表里移除 <strong>${repo.owner}/${repo.repo}</strong> 吗？`);
+    const ok = await confirmDialog(`确定要从监测列表里移除 <strong>${esc(repo.owner)}/${esc(repo.repo)}</strong> 吗？`);
     if (!ok) return;
     try {
       await backend.remove(id);
       toast(`已移除 ${repo.owner}/${repo.repo}`, 'success');
       await refresh({ quiet: true });
     } catch (e) { toast(e.message, 'error'); }
+    return;
+  }
+
+  if (action === 'reset') {
+    btn.disabled = true;
+    try {
+      const res = await backend.reset(id);
+      toast(res.note || '基线已清除', 'info');
+      await refresh({ quiet: true });
+    } catch (e) { toast(e.message, 'error'); }
+    finally { btn.disabled = false; }
     return;
   }
 
@@ -500,20 +602,20 @@ grid.addEventListener('click', async (ev) => {
       if (!releases.length) { box.innerHTML = `<div class="release-item"><span class="name">这个仓库还没有发布任何 Release</span></div>`; return; }
       // Release 的 name 经常就等于 tag（GitHub 自动生成），重复显示纯属噪音 —— 相同就不显示
       const stripV = (s) => String(s || '').replace(/^v/i, '').toLowerCase();
-      box.innerHTML = releases.map((r) => {
-        const name = (r.name || '').trim();
-        const showName = name && stripV(name) !== stripV(r.tag);
+      box.innerHTML = releases.map((rel) => {
+        const name = (rel.name || '').trim();
+        const showName = name && stripV(name) !== stripV(rel.tag);
         return `
         <div class="release-item">
-          <span class="tag ${r.tag === repo.latest?.tag ? 'tag-new' : ''}">${r.tag}</span>
+          <span class="tag ${rel.tag === repo.latest?.tag ? 'tag-new' : ''}">${esc(rel.tag)}</span>
           ${showName
-            ? `<a class="name" href="${r.url}" target="_blank" rel="noreferrer noopener" title="${name.replace(/"/g, '&quot;')}">${name.slice(0, 42)}</a>`
+            ? `<a class="name" href="${esc(rel.url)}" target="_blank" rel="noreferrer noopener" title="${esc(name)}">${esc(name.slice(0, 42))}</a>`
             : `<span class="name"></span>`}
-          <span class="date">${fmtDate(r.publishedAt)}</span>
+          <span class="date">${fmtDate(rel.publishedAt)}</span>
         </div>`;
       }).join('');
     } catch (e) {
-      box.innerHTML = `<div class="release-item"><span class="name" style="color:var(--destructive)">加载失败：${e.message}</span></div>`;
+      box.innerHTML = `<div class="release-item"><span class="name" style="color:var(--destructive-text)">加载失败：${esc(e.message)}</span></div>`;
     }
     return;
   }

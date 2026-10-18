@@ -1,7 +1,7 @@
 {
   "name": "github-update-watch",
   "productName": "GitHub Update Watch",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "private": true,
   "description": "自定义 GitHub 项目列表，检测是否有新版本发布",
   "author": "Animal2404",
@@ -12,7 +12,8 @@
     "start": "electron .",
     "dist": "electron-builder --win --x64 --publish never",
     "dist:linux": "electron-builder --linux AppImage --x64 --publish never",
-    "icons": "python tools/make-icons.py"
+    "icons": "python tools/make-icons.py",
+    "test": "node --test"
   },
   "devDependencies": {
     "electron": "31.7.7",
@@ -30,6 +31,7 @@
     "files": [
       "electron/**/*",
       "server.mjs",
+      "secret.mjs",
       "public/**/*",
       "build/icon.png",
       "package.json"

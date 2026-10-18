@@ -44,37 +44,24 @@
   </header>
 
   <main id="main">
-    <!-- 添加项目 -->
-    <section class="card panel" aria-labelledby="addTitle">
-      <div class="panel-head">
-        <svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true"><path data-icon="plus"></path></svg>
-        <h2 id="addTitle">添加项目</h2>
-      </div>
-      <form id="addForm" novalidate>
-        <div class="field-row">
-          <div class="field">
-            <label class="sr-only" for="repoInput">GitHub 仓库地址</label>
-            <input class="input" id="repoInput" name="repo" type="text" autocomplete="off" spellcheck="false"
-                   placeholder="粘贴链接或填 owner/repo，如 https://github.com/facebook/react"
-                   aria-describedby="repoHint">
-            <p class="hint" id="repoHint">支持完整链接、<code>owner/repo</code>、<code>git@github.com:owner/repo.git</code>；添加时会把当前最新版本记为基线。</p>
-          </div>
-          <button class="btn btn-primary" id="addBtn" type="submit">
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path data-icon="plus"></path></svg>
-            <span id="addBtnLabel">添加</span>
-          </button>
+    <!-- 添加 + 工具栏：一个连续的控制区。去掉了两层"卡片套卡片"，
+         卡片只留给真正需要交互的对象（项目卡）。 -->
+    <section class="deck" aria-labelledby="listTitle">
+      <form class="add-row" id="addForm" novalidate>
+        <div class="field">
+          <label class="sr-only" for="repoInput">GitHub 仓库地址</label>
+          <input class="input" id="repoInput" name="repo" type="text" autocomplete="off" spellcheck="false"
+                 placeholder="粘贴 GitHub 链接或 owner/repo…" aria-describedby="repoHint">
         </div>
+        <button class="btn btn-primary" id="addBtn" type="submit">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path data-icon="plus"></path></svg>
+          <span id="addBtnLabel">添加</span>
+        </button>
       </form>
-    </section>
+      <p class="hint" id="repoHint">支持完整链接、<code>owner/repo</code>、<code>git@github.com:owner/repo.git</code>；添加时把当前最新版本记为基线。</p>
 
-    <!-- 工具栏 -->
-    <section class="card panel" aria-labelledby="listTitle">
-      <div class="panel-head">
-        <svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true"><path data-icon="activity"></path></svg>
-        <h2 id="listTitle">监测列表</h2>
-      </div>
-      <p class="hint" id="lastRunLine">尚未检查过</p>
       <div class="toolbar-row">
+        <h2 class="deck-title" id="listTitle">监测列表</h2>
         <button class="btn btn-secondary" id="checkAllBtn" type="button">
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path data-icon="refresh-cw"></path></svg>
           <span id="checkAllLabel">全部检查</span>
@@ -87,6 +74,7 @@
         </div>
         <span class="status-line" id="jobStatus" role="status" aria-live="polite"></span>
       </div>
+      <p class="meta-line" id="lastRunLine">尚未整体检查过</p>
     </section>
 
     <!-- 列表 -->

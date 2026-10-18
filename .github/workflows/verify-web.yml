@@ -25,6 +25,9 @@ jobs:
       - name: 校验版本号一致（package.json ↔ public/version.js）
         run: node tools/bump-version.mjs --check
 
+      - name: 纯逻辑单元测试（semver / 解析 / 转义 / 基线状态机）
+        run: npm test
+
       - name: 启动本地服务
         run: |
           node server.mjs > server.log 2>&1 &
@@ -34,7 +37,7 @@ jobs:
           done
           cat server.log
 
-      - name: 逐按钮验证（本机服务模式，24 项断言）
+      - name: 逐按钮验证（本机服务模式）
         run: node tools/verify-ui.mjs http://127.0.0.1:7321/
 
       - name: 逐按钮验证（直连模式 = APK 走的路径，9 项断言）

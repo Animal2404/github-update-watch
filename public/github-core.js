@@ -12,6 +12,13 @@
  * 所以「手机和电脑功能一模一样」不是靠人工对齐，而是同一份代码。
  */
 
+/** HTML 转义。任何来自 GitHub 或用户输入的字符串，拼进 innerHTML 之前都必须过这一层。 */
+export function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (ch) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
+  ));
+}
+
 export const CACHE_TTL_MS = 3 * 60 * 1000;
 export const TIMEOUT_MS = 25000;
 const CONCURRENCY = 3;
@@ -105,7 +112,11 @@ export function createGithub({ fetchText }) {
     const body = res.body ?? (() => { try { return JSON.parse(res.text); } catch { return null; } })();
     if (res.status === 403 || res.status === 429) {
       const limited = /rate limit/i.test(body?.message || '') || res.status === 429;
-      throw new AppError(limited ? 'GitHub 未认证限流（60 次/小时）已用尽，可在设置里填 Token 提升到 5000 次/小时' : (body?.message || `HTTP ${res.status}`), { status: res.status, rateLimited: limited });
+      // 文案必须按「有没有 Token」分支：填了 Token 却被告知"未认证 60 次/小时"会把排查带偏
+      const limitedText = token
+        ? 'GitHub API 限流已用尽（已用 Token，额度 5000 次/小时）；稍后重试，或在设置里确认 Token 仍然有效'
+        : 'GitHub 未认证限流（60 次/小时）已用尽，可在设置里填 Token 提升到 5000 次/小时';
+      throw new AppError(limited ? limitedText : (body?.message || `HTTP ${res.status}`), { status: res.status, rateLimited: limited });
     }
     if (res.status === 404) throw new AppError('仓库不存在或不可访问（404）', { status: 404 });
     if (res.status >= 400) throw new AppError(body?.message || `HTTP ${res.status}`, { status: res.status });
@@ -114,15 +125,55 @@ export function createGithub({ fetchText }) {
     return body;
   }
 
+  const PER_PAGE = 30;
+  const MAX_PAGES = 3;
+
+  function bestTag(list, tagOf) {
+    let best = null;
+    for (const item of list) {
+      const tag = tagOf(item);
+      if (!tag || !parseVer(tag)) continue;
+      if (best === null || (cmpVer(tag, best) ?? 0) > 0) best = tag;
+    }
+    return best;
+  }
+
+  /**
+   * 按需翻页。默认只取第一页（30 条）；只有同时满足
+   *   ① 第一页满载  ② 调用方给了基线  ③ 这一页的最大版本还没超过基线
+   * 才继续翻，最多 3 页（90 条）。
+   *
+   * 为什么需要它：page 1 是按 created_at 排的，不是按版本号。仓库先发 3.0.0、之后又连续
+   * 补了 30 个 2.x 热修时，3.0.0 会掉出第一页，旧逻辑就会误判「已是最新」。
+   * 首次记录基线（没有 baseline）时只取一页：那时只需要"当前最新"，翻页纯浪费额度。
+   */
+  async function collectPages(pathname, { token, fresh, baseline, tagOf }) {
+    const all = [];
+    let pages = 0;
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const batch = await gh(`${pathname}?per_page=${PER_PAGE}&page=${page}`, { token, fresh });
+      pages++;
+      if (!Array.isArray(batch) || !batch.length) break;
+      all.push(...batch);
+      if (batch.length < PER_PAGE) break;                    // 已经是最后一页
+      if (!baseline) break;                                  // 首次记录：一页足够
+      const best = bestTag(all, tagOf);
+      if (best && (cmpVer(best, baseline) ?? 0) > 0) break;   // 已经看到更新，没必要再翻
+    }
+    return { all, pages };
+  }
+
   /** 最新版本：releases（含预发布，按 semver 取最大）→ 取不到再退到 tags */
-  async function fetchLatest(owner, repo, token = '', fresh = false) {
+  async function fetchLatest(owner, repo, token = '', fresh = false, { baseline = null } = {}) {
     try {
-      const releases = await gh(`/repos/${owner}/${repo}/releases?per_page=30`, { token, fresh });
+      const { all: releases } = await collectPages(`/repos/${owner}/${repo}/releases`, {
+        token, fresh, baseline, tagOf: (r) => r.tag_name,
+      });
       const items = (Array.isArray(releases) ? releases : [])
         .filter((r) => !r.draft)
         .map((r) => ({
           tag: r.tag_name, name: r.name || r.tag_name, url: r.html_url,
-          publishedAt: r.published_at, prerelease: !!r.prerelease, body: (r.body || '').slice(0, 4000),
+          publishedAt: r.published_at, prerelease: !!r.prerelease,
         }))
         .filter((r) => r.tag);
       if (items.length) {
@@ -133,15 +184,18 @@ export function createGithub({ fetchText }) {
       if (e instanceof AppError && (e.rateLimited || e.status === 404)) throw e;
       // 其它错误（网络抖动等）继续尝试 tags
     }
-    const tags = await gh(`/repos/${owner}/${repo}/tags?per_page=30`, { token, fresh });
+    const { all: tags } = await collectPages(`/repos/${owner}/${repo}/tags`, {
+      token, fresh, baseline, tagOf: (t) => t.name,
+    });
     const list = (Array.isArray(tags) ? tags : []).filter((t) => t.name);
     if (!list.length) throw new AppError('该仓库没有任何 release 或 tag');
     const latest = list.reduce((a, b) => ((cmpVer(b.name, a.name) ?? 0) > 0 ? b : a));
     return {
       latest: {
         tag: latest.name, name: latest.name,
-        url: `https://github.com/${owner}/${repo}/releases/tag/${encodeURIComponent(latest.name)}`,
-        publishedAt: null, prerelease: false, body: '',
+        // tag 兜底时仓库很可能没有 Release 页，/releases/tag/xxx 会 404；/tree/xxx 一定有内容
+        url: `https://github.com/${owner}/${repo}/tree/${encodeURIComponent(latest.name)}`,
+        publishedAt: null, prerelease: false,
       },
       source: 'tags', count: list.length,
     };
@@ -195,7 +249,7 @@ export function createStore({ github, load, save }) {
       const needMeta = !rec.metaAt || Date.now() - Date.parse(rec.metaAt) > 24 * 3600 * 1000;
       const [meta, latestInfo] = await Promise.all([
         needMeta ? github.gh(`/repos/${rec.owner}/${rec.repo}`, { token, fresh }).catch(() => null) : Promise.resolve(null),
-        github.fetchLatest(rec.owner, rec.repo, token, fresh),
+        github.fetchLatest(rec.owner, rec.repo, token, fresh, { baseline: rec.baseline || null }),
       ]);
       if (meta) {
         rec.metaAt = new Date().toISOString();

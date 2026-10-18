@@ -276,19 +276,23 @@ try {
     return `${n} 张卡片`;
   });
 
-  await check('过滤器「有更新」：点击后只留 update 卡片（当前应为 0 张 + 空态提示）', async () => {
+  await check('过滤器「有更新」：只留 update 卡片；一张都没有时给空态（不假设初始数据全是最新）', async () => {
     await cdp.eval(`document.querySelector('.chip[data-filter="update"]').click()`);
     await sleep(220);
-    const info = await cdp.eval(`(() => ({
-      pressed: document.querySelector('.chip[data-filter="update"]').getAttribute('aria-pressed'),
-      cards: document.querySelectorAll('.repo-card').length,
-      emptyHidden: document.querySelector('#emptyState').hidden,
-      emptyTitle: document.querySelector('#emptyTitle').textContent,
-    }))()`);
+    const info = await cdp.eval(`(() => {
+      const cards = [...document.querySelectorAll('.repo-card')];
+      return {
+        pressed: document.querySelector('.chip[data-filter="update"]').getAttribute('aria-pressed'),
+        cards: cards.length,
+        allUpdate: cards.every(c => c.dataset.status === 'update'),
+        emptyHidden: document.querySelector('#emptyState').hidden,
+        emptyTitle: document.querySelector('#emptyTitle').textContent,
+      };
+    })()`);
     assert(info.pressed === 'true', 'aria-pressed 没更新');
-    assert(info.emptyHidden === false, '没有显示空态');
-    assert(/没有匹配/.test(info.emptyTitle), `空态标题不对：${info.emptyTitle}`);
-    return `${info.cards} 张卡片 + 空态「${info.emptyTitle}」`;
+    assert(info.allUpdate, '过滤后混进了非 update 卡片');
+    if (info.cards === 0) assert(info.emptyHidden === false, '没有可显示卡片时应显示空态');
+    return info.cards ? `${info.cards} 张 update 卡片` : `0 张 + 空态「${info.emptyTitle}」`;
   });
 
   await check('过滤器「有问题」：切到该过滤，列表按状态收敛', async () => {
@@ -374,11 +378,59 @@ try {
     return `${info.title}（${info.rel.replace('https://github.com/', '')}）${info.rename ? ' · ' + info.rename : ''}`;
   });
 
-  await check('「标记已读」按钮在无更新时是禁用的（且给出原因提示）', async () => {
-    const info = await cdp.eval(`(() => { const b=document.querySelector('.repo-card[data-id="facebook/react"] [data-action="ack"]'); return { disabled: b.disabled, title: b.title }; })()`);
-    assert(info.disabled === true, '无更新时不该可点');
+  await check('「标记已读」在无更新时根本不出现（禁用按钮不再常驻刷屏）', async () => {
+    const info = await cdp.eval(`(() => { const b=document.querySelector('.repo-card[data-id="${NEW_REPO}"] [data-action="ack"]'); return { hidden: b.hidden, disabled: b.disabled, title: b.title }; })()`);
+    assert(info.hidden === true, '无更新时不该显示「标记已读」');
+    assert(info.disabled === true, '隐藏态也应保持 disabled，避免被脚本误点');
     assert(/没有待确认/.test(info.title), `缺少原因提示：${info.title}`);
     return info.title;
+  });
+
+  await check('「⋯」菜单：点开有 aria-expanded / 焦点进第一项，Escape 关闭并把焦点还给触发按钮', async () => {
+    const id = 'facebook/react';
+    await cdp.eval(`document.querySelector('.repo-card[data-id="${id}"] [data-action="menu"]').click()`);
+    await sleep(220);
+    const opened = await cdp.eval(`(() => {
+      const c = document.querySelector('.repo-card[data-id="${id}"]');
+      const items = [...c.querySelectorAll('.menu-item:not([hidden])')].map(i => i.textContent.trim());
+      return {
+        visible: !c.querySelector('[data-field="menu"]').hidden,
+        expanded: c.querySelector('[data-action="menu"]').getAttribute('aria-expanded'),
+        focusOnItem: document.activeElement?.classList.contains('menu-item') || false,
+        items,
+      };
+    })()`);
+    assert(opened.visible === true, '菜单没展开');
+    assert(opened.expanded === 'true', 'aria-expanded 没更新');
+    assert(opened.focusOnItem === true, '打开后焦点应落到第一个菜单项（键盘用户）');
+    assert(opened.items.length >= 3, `菜单项太少：${JSON.stringify(opened.items)}`);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await sleep(220);
+    const closed = await cdp.eval(`(() => {
+      const c = document.querySelector('.repo-card[data-id="${id}"]');
+      return {
+        hidden: c.querySelector('[data-field="menu"]').hidden,
+        expanded: c.querySelector('[data-action="menu"]').getAttribute('aria-expanded'),
+        focusBack: document.activeElement === c.querySelector('[data-action="menu"]'),
+      };
+    })()`);
+    assert(closed.hidden === true && closed.expanded === 'false', JSON.stringify(closed));
+    assert(closed.focusBack === true, '关闭后焦点应回到「⋯」');
+    return `菜单项：${opened.items.join(' / ')}`;
+  });
+
+  await check('回归：点链接不会顺手触发 check/ack（以前点 Release 会静默推进基线）', async () => {
+    const before = await cdp.eval(`(() => {
+      document.querySelectorAll('.toast').forEach(t => t.remove());
+      const link = document.querySelector('.repo-card[data-id="facebook/react"] [data-action="release-link"]');
+      link.addEventListener('click', (e) => e.preventDefault(), { once: true });
+      link.click();
+      return { toasts: document.querySelectorAll('.toast').length };
+    })()`);
+    await sleep(450);
+    const after = await cdp.eval(`({ toasts: document.querySelectorAll('.toast').length })`);
+    assert(after.toasts === 0, `点链接后弹出了 ${after.toasts} 条 toast —— 说明又掉进 check/ack 分支了`);
+    return '链接点击无副作用';
   });
 
   // ---------- 5. 设置对话框 ----------
@@ -405,8 +457,14 @@ try {
   });
 
   // ---------- 6. 删除 ----------
-  await check(`按钮「删除」：弹确认框 → 取消不删 → 确认后卡片消失`, async () => {
+  await check(`菜单「删除项目」：开菜单 → 弹确认框 → 取消不删 → 确认后卡片消失`, async () => {
     const sel = `.repo-card[data-id="${NEW_REPO}"] [data-action="delete"]`;
+    const opened = await cdp.eval(`(() => {
+      const c = document.querySelector('.repo-card[data-id="${NEW_REPO}"]');
+      c.querySelector('[data-action="menu"]').click();
+      return !c.querySelector('[data-field="menu"]').hidden;
+    })()`);
+    assert(opened === true, '「⋯」菜单没打开');
     await cdp.eval(`document.querySelector('${sel}').click()`);
     await sleep(260);
     assert((await cdp.eval(`document.querySelector('#confirmDialog').open`)) === true, '确认框没弹出');

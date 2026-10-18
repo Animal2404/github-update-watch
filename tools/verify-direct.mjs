@@ -130,9 +130,10 @@ try {
     await sleep(1600);
     await waitFor(`document.querySelector('.repo-card[data-id="microsoft/typescript"]')?.dataset.status === 'update'`, { timeout: 20000, label: '变成有新版本' });
     const badge = await evaluate(`document.querySelector('.repo-card[data-id="microsoft/typescript"] [data-testid="status-text"]').textContent`);
-    const ackDisabled = await evaluate(`document.querySelector('.repo-card[data-id="microsoft/typescript"] [data-action="ack"]').disabled`);
+    const ackState = await evaluate(`(() => { const b = document.querySelector('.repo-card[data-id="microsoft/typescript"] [data-action="ack"]'); return { disabled: b.disabled, hidden: b.hidden }; })()`);
     assert(badge === '有新版本', `徽章不对：${badge}`);
-    assert(ackDisabled === false, '「标记已读」此时应当可用');
+    assert(ackState.hidden === false, '有新版本时「标记已读」必须出现');
+    assert(ackState.disabled === false, '「标记已读」此时应当可用');
     await evaluate(`document.querySelector('.repo-card[data-id="microsoft/typescript"] [data-action="ack"]').click()`);
     await waitFor(`document.querySelector('.repo-card[data-id="microsoft/typescript"]')?.dataset.status === 'clean'`, { timeout: 20000, label: '已读后回到最新' });
     const after = await evaluate(`(() => { const x = window.__guw.state.repos.find(r => r.id === 'microsoft/typescript'); return { status: x.status, baseline: x.baseline, latest: x.latest.tag }; })()`);
@@ -202,7 +203,13 @@ try {
     return after.slice(0, 90);
   });
 
-  await check('直连模式删除项目：localStorage 同步清掉', async () => {
+  await check('直连模式删除项目：开「⋯」菜单 → 确认 → localStorage 同步清掉', async () => {
+    await evaluate(`(() => {
+      const c = document.querySelector('.repo-card');
+      c.querySelector('[data-action="menu"]').click();
+      return !c.querySelector('[data-field="menu"]').hidden;
+    })()`);
+    await sleep(220);
     await evaluate(`document.querySelector('.repo-card [data-action="delete"]').click()`);
     await sleep(300);
     await evaluate(`document.querySelector('#confirmOkBtn').click()`);
