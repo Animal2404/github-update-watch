@@ -669,6 +669,8 @@ function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   localStorage.setItem('guw-theme', theme);
   try { window.AndroidTheme && window.AndroidTheme.setTheme(theme); } catch { /* 非安卓环境 */ }
+  const themeMeta = document.querySelector('meta[name="theme-color"]');
+  if (themeMeta) themeMeta.setAttribute('content', theme === 'light' ? '#ffffff' : '#09090b');
   morph($('#themeBtn').querySelector('svg'), theme === 'dark' ? 'moon' : 'sun');
   requestAnimationFrame(updateFilterThumb);
 }

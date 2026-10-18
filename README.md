@@ -162,6 +162,9 @@ GitHub 未认证的 API 额度是 **60 次/小时/IP**，界面右上角有实�
 > 1.3.1 / 1.3.2 只修构建链：XML 注释里的 `--`、APK 证书解析（改用仓库内 tools/apk-cert.mjs）、Linux 打包重试。
 > 1.3.0 未产出发布包。
 
+**滚动条**：Windows 默认滚动条带箭头按钮和实心轨道，和中性界面不搭。已统一成 10px 透明轨道 + 圆角内缩滑块（版本窗口 8px、默认 24% 灰、悬停 55%），隐藏箭头按钮，
+并同步 `<meta name="theme-color">`；安卓 overlay 滚动条不预留 gutter。
+
 **为什么 APK 只有 471 KB**
 - 安卓包是 **WebView 壳**：界面资源在 `assets/www`（约 100 KB），运行时用系统 WebView 渲染，不打包 Chromium。
   74.6 MB 的 EXE 是 Electron，里面自带一整个 Chromium，所以体积差两个数量级是正常的，不是空壳。

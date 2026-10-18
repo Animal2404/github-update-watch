@@ -36,6 +36,10 @@
   --overlay: rgb(0 0 0 / .72);
   --shadow-xs: 0 1px 2px rgb(0 0 0 / .5);
   --shadow-pop: 0 18px 40px -22px rgb(0 0 0 / .9), 0 2px 8px rgb(0 0 0 / .5);
+  /* 滚动条：与 shadcn 的 muted/border 同一套灰阶，不抢内容 */
+  --sb-thumb: #3f3f46;
+  --sb-thumb-hover: #52525b;
+  --sb-track: transparent;
   --radius: 0.625rem;
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Consolas, "Liberation Mono", monospace;
@@ -73,6 +77,9 @@
   --overlay: rgb(24 24 27 / .45);
   --shadow-xs: 0 1px 2px rgb(24 24 27 / .07);
   --shadow-pop: 0 18px 40px -24px rgb(24 24 27 / .35), 0 2px 8px rgb(24 24 27 / .08);
+  --sb-thumb: #d4d4d8;
+  --sb-thumb-hover: #a1a1aa;
+  --sb-track: transparent;
   color-scheme: light;
 }
 
@@ -103,6 +110,31 @@ svg { display: block; }
   outline-offset: 2px;
 }
 ::selection { background: color-mix(in srgb, var(--foreground) 22%, transparent); }
+
+/* ---------------------------------------------------------------- 滚动条
+   Windows 默认滚动条会带箭头按钮和实心轨道，和这套中性界面很违和。
+   Electron / Android WebView 都是 Chromium，用 ::-webkit-scrollbar 统一成：
+   透明轨道 + 圆角滑块（2px 透明边框形成内缩）+ 悬停加深；箭头按钮直接隐藏。
+   注意：不要同时给元素写 scrollbar-width，否则 Chromium 会改用原生滚动条、忽略 ::-webkit-scrollbar。 */
+html { scrollbar-gutter: stable; }
+/* 安卓 WebView 是 overlay 滚动条：不要再给它预留一条空白 gutter */
+@media (hover: none), (pointer: coarse) {
+  html { scrollbar-gutter: auto; }
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--sb-track); }
+::-webkit-scrollbar-thumb {
+  background: var(--sb-thumb);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--sb-thumb-hover);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+::-webkit-scrollbar-corner { background: transparent; }
 
 .skip-link {
   position: absolute; left: -9999px; top: 0; z-index: 100;
@@ -309,9 +341,21 @@ svg { display: block; }
 .repo-error { font-size: .75rem; color: var(--destructive-text); background: color-mix(in srgb, var(--destructive) 10%, transparent); border-radius: 7px; padding: .35rem .5rem; }
 .releases-window { position: relative; border-top: 1px solid var(--border); margin-top: .05rem; }
 .releases-scroll {
-  height: 102px; overflow-y: auto;
+  height: 102px; overflow-y: auto; scrollbar-gutter: stable;
   display: flex; flex-direction: column; gap: 0;
-  scrollbar-width: thin;
+}
+/* 版本窗口更窄的轨：默认近乎透明，悬停/聚焦才显出来，不打断阅读 */
+.releases-scroll::-webkit-scrollbar { width: 8px; }
+.releases-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted-foreground) 24%, transparent);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+.releases-scroll:hover::-webkit-scrollbar-thumb,
+.releases-scroll:focus-within::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted-foreground) 55%, transparent);
+  background-clip: padding-box;
 }
 .releases-scroll .release-item { min-height: 34px; }
 .releases-window::after {
