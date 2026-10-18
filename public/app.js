@@ -55,8 +55,32 @@ const directBackend = (() => {
     try { body = JSON.parse(text); } catch { /* 忽略 */ }
     return { status: r.status, text, body, headers: Object.fromEntries(r.headers.entries()) };
   };
+  // Android WebView 里第三方订阅站不给 CORS，额度头也不在 exposed headers；
+  // 有原生桥时订阅请求走原生（原生能读 status/headers/body），网页只负责解析。
+  const androidFetch = (() => {
+    if (!window.AndroidHttp) return null;
+    var seq = 0;
+    var pending = new Map();
+    window.__androidHttp = function (id, payload) {
+      var entry = pending.get(id);
+      if (!entry) return;
+      pending.delete(id);
+      clearTimeout(entry.timer);
+      if (payload && payload.error) entry.reject(new Error(payload.error));
+      else entry.resolve({ status: payload.status, text: payload.text, headers: payload.headers || {}, body: null });
+    };
+    return function (url, headers) {
+      return new Promise(function (resolve, reject) {
+        var id = 'h' + (++seq) + '-' + Date.now();
+        var timer = setTimeout(function () { pending.delete(id); reject(new Error('请求超时（20 秒）')); }, 20000);
+        pending.set(id, { resolve: resolve, reject: reject, timer: timer });
+        try { window.AndroidHttp.fetch(id, url, JSON.stringify(headers || {})); }
+        catch (e) { clearTimeout(timer); pending.delete(id); reject(e); }
+      });
+    };
+  })();
   const github = createGithub({ fetchText });
-  const store = createStore({ github, load, save, fetchText });
+  const store = createStore({ github, load, save, fetchText, subscriptionFetch: androidFetch || fetchText });
   let rateCache = { at: 0, value: null };
   return {
     kind: 'direct',
@@ -219,15 +243,15 @@ function createCard(r) {
     <div class="repo-meta" data-field="meta"></div>
     <div class="versions" data-field="versions"></div>
     <div class="repo-error" data-field="error" hidden></div>
-    <div class="releases" data-field="releases" hidden></div>
+    <div class="releases-window" data-field="releases" hidden>
+      <div class="releases-scroll" data-field="releases-scroll" tabindex="0" role="region" aria-label="最近版本"></div>
+      <div class="releases-hint"><span data-field="release-count"></span><span>滚轮 / 滑动看更早</span></div>
+    </div>
     <!-- 一行动作：主操作在左，低频/危险操作收进右侧「⋯」，卡片里不再挤六个按钮 -->
     <div class="repo-actions">
       <div class="actions-left">
         <button class="btn btn-sm btn-outline" type="button" data-action="check">
           ${iconSvg('refresh-cw', 'icon icon-sm')}<span>检查</span>
-        </button>
-        <button class="btn btn-sm btn-ghost" type="button" data-action="releases" aria-expanded="false">
-          ${iconSvg('chevron-down', 'icon icon-sm')}<span>版本历史</span>
         </button>
         <button class="btn btn-sm btn-ghost btn-ack" type="button" data-action="ack" hidden>
           ${iconSvg('check-check', 'icon icon-sm')}<span>标记已读</span>
@@ -259,6 +283,7 @@ function createCard(r) {
     </div>`;
   initAllIcons(el);
   updateCard(el, r, { fresh: true });
+  hydrateReleases(el);
   return el;
 }
 
@@ -540,7 +565,8 @@ $('#addForm').addEventListener('submit', async (ev) => {
 // ---------------------------------------------------------------- 交互：全部检查（带轮询）
 let pollTimer = null;
 function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
-$('#checkAllBtn').addEventListener('click', async () => {
+async function runCheckAll({ automatic = false } = {}) {
+  if (state.job?.running) return;
   try {
     await backend.checkAll();
     state.job = { running: true, done: 0, total: state.repos.length, failed: 0 };
@@ -557,10 +583,12 @@ $('#checkAllBtn').addEventListener('click', async () => {
         }
       } catch { stopPolling(); }
     }, 700);
+    if (automatic) toast('启动检查：开始检查 ' + state.repos.length + ' 个项目', 'info');
   } catch (e) {
-    toast(e.message, 'error');
+    if (!automatic) toast(e.message, 'error');
   }
-});
+}
+$('#checkAllBtn').addEventListener('click', () => runCheckAll());
 
 // ---------------------------------------------------------------- 交互：卡片按钮（事件委托）
 grid.addEventListener('click', async (ev) => {
@@ -603,42 +631,6 @@ grid.addEventListener('click', async (ev) => {
     return;
   }
 
-  if (action === 'releases') {
-    const box = card.querySelector('[data-field="releases"]');
-    const expanded = btn.getAttribute('aria-expanded') === 'true';
-    if (expanded) {
-      btn.setAttribute('aria-expanded', 'false');
-      morph(svg, 'chevron-down');
-      box.hidden = true;
-      return;
-    }
-    btn.setAttribute('aria-expanded', 'true');
-    morph(svg, 'chevron-up');
-    box.hidden = false;
-    box.innerHTML = `<div class="release-item"><span class="name">加载中…</span></div>`;
-    try {
-      const { releases } = await backend.releases(id);
-      if (!releases.length) { box.innerHTML = `<div class="release-item"><span class="name">这个仓库还没有发布任何 Release</span></div>`; return; }
-      // Release 的 name 经常就等于 tag（GitHub 自动生成），重复显示纯属噪音 —— 相同就不显示
-      const stripV = (s) => String(s || '').replace(/^v/i, '').toLowerCase();
-      box.innerHTML = releases.map((rel) => {
-        const name = (rel.name || '').trim();
-        const showName = name && stripV(name) !== stripV(rel.tag);
-        return `
-        <div class="release-item">
-          <span class="tag ${rel.tag === repo.latest?.tag ? 'tag-new' : ''}">${esc(rel.tag)}</span>
-          ${showName
-            ? `<a class="name" href="${esc(rel.url)}" target="_blank" rel="noreferrer noopener" title="${esc(name)}">${esc(name.slice(0, 42))}</a>`
-            : `<span class="name"></span>`}
-          <span class="date">${fmtDate(rel.publishedAt)}</span>
-        </div>`;
-      }).join('');
-    } catch (e) {
-      box.innerHTML = `<div class="release-item"><span class="name" style="color:var(--destructive-text)">加载失败：${esc(e.message)}</span></div>`;
-    }
-    return;
-  }
-
   // check / ack
   btn.disabled = true;
   setBusy(svg, true);
@@ -676,6 +668,7 @@ $('#searchInput').addEventListener('input', (ev) => {
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   localStorage.setItem('guw-theme', theme);
+  try { window.AndroidTheme && window.AndroidTheme.setTheme(theme); } catch { /* 非安卓环境 */ }
   morph($('#themeBtn').querySelector('svg'), theme === 'dark' ? 'moon' : 'sun');
   requestAnimationFrame(updateFilterThumb);
 }
@@ -736,7 +729,6 @@ $('#confirmOkBtn').addEventListener('click', () => { confirmEl.close(); confirmR
 confirmEl.addEventListener('cancel', (ev) => { ev.preventDefault(); confirmEl.close(); confirmResolve?.(false); confirmResolve = null; });
 
 // ---------------------------------------------------------------- 节点订阅
-const SUBS_OPEN = new Set();   // 哪些订阅展开了节点列表（刷新后保持）
 
 function fmtBytes(n) {
   if (n == null) return '—';
@@ -775,14 +767,6 @@ function subCardHtml(sub) {
   Object.keys(protocols).slice(0, 6).forEach(function (key) {
     protos += '<span class="proto">' + esc(key) + ' ' + protocols[key] + '</span>';
   });
-  var expanded = SUBS_OPEN.has(sub.id);
-  var nodeRows = '';
-  var nodes = (sub.nodes && sub.nodes.nodes) || [];
-  nodes.slice(0, 200).forEach(function (node) {
-    nodeRows += '<div class="sub-node"><span>' + esc(node.name) + '</span><span class="type">' + esc(node.type || '') + '</span></div>';
-  });
-  if (!nodeRows) nodeRows = '<div class="sub-node">没有解析到节点</div>';
-
   var html = '';
   html += '<article class="card sub-card" data-sub-id="' + esc(sub.id) + '">';
   html += '<div class="sub-head"><div class="sub-title">';
@@ -804,11 +788,9 @@ function subCardHtml(sub) {
 
   html += '<div class="sub-actions">';
   html += '<button class="btn btn-sm btn-outline" type="button" data-sub-action="refresh">' + iconSvg('refresh-cw', 'icon icon-sm') + '<span>刷新</span></button>';
-  html += '<button class="btn btn-sm btn-ghost" type="button" data-sub-action="nodes" aria-expanded="' + expanded + '">' + iconSvg(expanded ? 'chevron-up' : 'chevron-down', 'icon icon-sm') + '<span>节点列表</span></button>';
   html += '<button class="btn btn-sm btn-ghost btn-icon" type="button" data-sub-action="delete" aria-label="删除订阅">' + iconSvg('trash-2', 'icon icon-sm') + '</button>';
   html += '</div>';
 
-  html += '<div class="sub-nodes" data-sub-nodes' + (expanded ? '' : ' hidden') + '>' + nodeRows + '</div>';
   html += '</article>';
   return html;
 }
@@ -871,21 +853,11 @@ $('#subList').addEventListener('click', async (ev) => {
   if (!sub) return;
   var action = btn.dataset.subAction;
 
-  if (action === 'nodes') {
-    var box = card.querySelector('[data-sub-nodes]');
-    var expanded = btn.getAttribute('aria-expanded') === 'true';
-    btn.setAttribute('aria-expanded', expanded ? 'false' : 'true');
-    box.hidden = expanded;
-    if (expanded) SUBS_OPEN.delete(id); else SUBS_OPEN.add(id);
-    return;
-  }
-
   if (action === 'delete') {
     var ok = await confirmDialog('确定要移除订阅 <strong>' + esc(sub.name) + '</strong> 吗？');
     if (!ok) return;
     try {
       await backend.removeSub(id);
-      SUBS_OPEN.delete(id);
       toast('已移除订阅 ' + sub.name, 'success');
       await refresh({ quiet: true });
     } catch (e) { toast(e.message, 'error'); }
@@ -907,6 +879,160 @@ $('#subList').addEventListener('click', async (ev) => {
     }
   }
 });
+
+// ---------------------------------------------------------------- 版本历史（固定 3 行窗口）
+// 卡片高度不随交互变化：窗口固定 3 行，多出来的版本在窗口内滚轮/滑动查看。
+// 这样"展开历史把邻居卡片撑高"在结构上就不可能再发生（配合 grid align-items:start）。
+const releaseCache = new Map();
+const releaseLoading = new Set();
+const releaseQueue = [];
+let releaseWorkers = 0;
+const releaseObserver = (typeof IntersectionObserver === 'function')
+  ? new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) return;
+        releaseObserver.unobserve(entry.target);
+        queueRelease(entry.target.dataset.id);
+      });
+    }, { rootMargin: '300px' })
+  : null;
+
+function hydrateReleases(el) {
+  const box = el.querySelector('[data-field="releases"]');
+  if (!box) return;
+  const cached = releaseCache.get(el.dataset.id);
+  if (cached) { renderReleaseRows(el, cached); return; }
+  if (releaseObserver) releaseObserver.observe(el);
+  else queueRelease(el.dataset.id);
+}
+
+function queueRelease(id) {
+  if (!id || releaseCache.has(id) || releaseLoading.has(id) || releaseQueue.indexOf(id) >= 0) return;
+  releaseQueue.push(id);
+  pumpReleases();
+}
+
+function pumpReleases() {
+  while (releaseWorkers < 2 && releaseQueue.length) {
+    const id = releaseQueue.shift();
+    releaseWorkers++;
+    loadReleases(id).finally(function () { releaseWorkers--; pumpReleases(); });
+  }
+}
+
+async function loadReleases(id) {
+  releaseLoading.add(id);
+  try {
+    const data = await backend.releases(id);
+    releaseCache.set(id, data.releases || []);
+    document.querySelectorAll('.repo-card').forEach(function (el) {
+      if (el.dataset.id === id) renderReleaseRows(el, releaseCache.get(id));
+    });
+  } catch (e) {
+    // 版本窗口是附加信息：失败就留空，不动主版本行，也不弹错（主检查会显示错误）
+  } finally {
+    releaseLoading.delete(id);
+  }
+}
+
+function renderReleaseRows(el, releases) {
+  const box = el.querySelector('[data-field="releases"]');
+  if (!box) return;
+  if (!releases || !releases.length) { box.hidden = true; return; }
+  const repo = state.repos.find(function (r) { return r.id === el.dataset.id; });
+  const stripV = function (v) { return String(v || '').replace(/^v/i, '').toLowerCase(); };
+  const scroll = el.querySelector('[data-field="releases-scroll"]');
+  scroll.innerHTML = releases.map(function (rel) {
+    const name = String(rel.name || '').trim();
+    const showName = name && stripV(name) !== stripV(rel.tag);
+    const latest = repo && repo.latest && rel.tag === repo.latest.tag;
+    return '<div class="release-item">'
+      + '<span class="tag ' + (latest ? 'tag-new' : '') + '">' + esc(rel.tag) + '</span>'
+      + (showName
+        ? '<a class="name" href="' + esc(rel.url) + '" target="_blank" rel="noreferrer noopener" title="' + esc(name) + '">' + esc(name.slice(0, 42)) + '</a>'
+        : '<span class="name"></span>')
+      + '<span class="date">' + fmtDate(rel.publishedAt) + '</span></div>';
+  }).join('');
+  el.querySelector('[data-field="release-count"]').textContent = '最近 ' + releases.length + ' 个版本';
+  box.hidden = false;
+}
+
+// ---------------------------------------------------------------- 自更新
+const UPDATE_KEY = 'guw-app-update';
+const UPDATE_TTL = 6 * 60 * 60 * 1000;
+
+function cmpVersion(a, b) {
+  const pa = String(a || '0').replace(/^v/i, '').split('.').map(function (x) { return parseInt(x, 10) || 0; });
+  const pb = String(b || '0').replace(/^v/i, '').split('.').map(function (x) { return parseInt(x, 10) || 0; });
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d;
+  }
+  return 0;
+}
+
+function androidUpdateCheck() {
+  return new Promise(function (resolve, reject) {
+    const timer = setTimeout(function () { reject(new Error('检查更新超时')); }, 15000);
+    window.__androidUpdate = function (result) { clearTimeout(timer); resolve(result); };
+    window.__androidUpdateError = function (message) { clearTimeout(timer); reject(new Error(message)); };
+    try { window.AndroidUpdate.check(); } catch (e) { clearTimeout(timer); reject(e); }
+  });
+}
+
+async function checkAppUpdate(force) {
+  const current = window.__GUW_VERSION || '0.0.0';
+  let cached = null;
+  try { cached = JSON.parse(localStorage.getItem(UPDATE_KEY) || 'null'); } catch { /* 忽略 */ }
+  if (!force && cached && Date.now() - cached.at < UPDATE_TTL) return cached.data;
+  let data;
+  if (window.AndroidUpdate) {
+    try { data = await androidUpdateCheck(); } catch (e) { return { error: e.message }; }
+  } else {
+    try {
+      const res = await fetch('https://api.github.com/repos/Animal2404/github-update-watch/releases/latest', {
+        headers: { accept: 'application/vnd.github+json' },
+      });
+      if (!res.ok) throw new Error('GitHub API HTTP ' + res.status);
+      const json = await res.json();
+      const assets = json.assets || [];
+      const apk = assets.find(function (a) { return /\.apk$/i.test(a.name); });
+      const exe = assets.find(function (a) { return /Setup.*\.exe$/i.test(a.name); });
+      data = {
+        current: current,
+        latest: json.tag_name,
+        url: json.html_url,
+        apk: apk && apk.browser_download_url,
+        exe: exe && exe.browser_download_url,
+      };
+    } catch (e) { return { error: e.message }; }
+  }
+  if (!data || !data.latest) return { error: '没有解析到版本号' };
+  if (!data.current) data.current = current;
+  try { localStorage.setItem(UPDATE_KEY, JSON.stringify({ at: Date.now(), data: data })); } catch { /* 忽略 */ }
+  return data;
+}
+
+async function renderUpdateBadge(force) {
+  const btn = $('#updateBtn');
+  if (!btn) return;
+  const info = await checkAppUpdate(force);
+  if (!info || info.error || !info.latest) { btn.hidden = true; return; }
+  if (cmpVersion(info.latest, info.current || window.__GUW_VERSION) <= 0) { btn.hidden = true; return; }
+  btn.hidden = false;
+  btn.innerHTML = iconSvg('package', 'icon icon-sm') + '<span>新版本 ' + esc(info.latest) + '</span>';
+  btn.title = '当前 ' + (info.current || window.__GUW_VERSION) + ' → ' + info.latest;
+  btn.onclick = function () {
+    if (window.AndroidUpdate && info.apk) {
+      toast('开始下载 ' + info.latest + '，完成后按系统提示安装', 'info');
+      try { window.AndroidUpdate.install(info.apk); } catch (e) { toast(e.message, 'error'); }
+      return;
+    }
+    const target = info.exe || info.url;
+    if (target) window.open(target, '_blank', 'noopener');
+    toast('已打开 ' + info.latest + ' 的下载', 'info');
+  };
+}
 
 // ---------------------------------------------------------------- 启动
 (async function boot() {
@@ -945,6 +1071,18 @@ $('#subList').addEventListener('click', async (ev) => {
       ? `${e.message} —— 请确认 server.mjs 还在运行（重新双击 start.cmd）。`
       : e.message;
   }
+  // 每次打开软件自动检查所有项目：10 分钟内重复启动不重复刷（额度是共享的 60 次/小时）
+  const AUTO_KEY = 'guw-auto-check-at';
+  let lastAuto = 0;
+  try { lastAuto = Number(localStorage.getItem(AUTO_KEY) || 0); } catch { /* 隐私模式 */ }
+  // 自动化验证（navigator.webdriver）不自动发请求：避免测试与真实检查互相干扰
+  const automated = navigator.webdriver || /HeadlessChrome/i.test(navigator.userAgent);
+  if (!automated && state.repos.length && Date.now() - lastAuto > 10 * 60 * 1000) {
+    try { localStorage.setItem(AUTO_KEY, String(Date.now())); } catch { /* 忽略 */ }
+    runCheckAll({ automatic: true });
+  }
+  renderUpdateBadge().catch(() => {});
+
   // 页面重新可见时刷新一次（服务端可能已被别的操作改动）
   document.addEventListener('visibilitychange', () => { if (!document.hidden && !state.job?.running) refresh({ quiet: true }).catch(() => {}); });
 })();

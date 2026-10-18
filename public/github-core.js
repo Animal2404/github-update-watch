@@ -235,7 +235,7 @@ export function publicRepo(r) {
  * @param load    () => { repos, settings } | null
  * @param save    (state) => void
  */
-export function createStore({ github, load, save, fetchText }) {
+export function createStore({ github, load, save, fetchText, subscriptionFetch }) {
   const persisted = load?.() || {};
   const repos = Array.isArray(persisted.repos) ? persisted.repos : [];
   const subscriptions = Array.isArray(persisted.subscriptions) ? persisted.subscriptions : [];
@@ -257,7 +257,7 @@ export function createStore({ github, load, save, fetchText }) {
       return rec;
     }
     try {
-      const result = await fetchSubscription(fetchText, rec.url);
+      const result = await fetchSubscription(subscriptionFetch || fetchText, rec.url);
       rec.quota = result.quota;
       rec.format = result.format;
       rec.nodes = { count: result.count, protocols: result.protocols, nodes: result.nodes.slice(0, 200) };

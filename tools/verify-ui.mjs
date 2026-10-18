@@ -267,7 +267,7 @@ try {
     assert(info.invalid === 'true', '没设 aria-invalid');
     assert(/请先填/.test(info.hint), '提示文案不对：' + info.hint);
     assert(info.cls.includes('is-error'), '提示没有进入错误态');
-    await cdp.eval('(() => { const i = document.querySelector("#subInput"); i.removeAttribute("aria-invalid"); const h = document.querySelector("#subHint"); h.className = "hint"; h.textContent = "额度来自订阅响应头 subscription-userinfo；链接只存在本机（服务端加密），界面只显示脱敏形式。"; return true; })()');
+    await cdp.eval('(() => { const i = document.querySelector("#subInput"); i.removeAttribute("aria-invalid"); const h = document.querySelector("#subHint"); h.className = "hint"; h.textContent = "链接只存在本机（桌面端加密落盘），界面只显示脱敏形式。"; return true; })()');
     return '订阅表单内联错误 + aria-invalid 生效';
   });
 
@@ -362,31 +362,37 @@ try {
     return `图标序列 ${log.join(' → ')}`;
   });
 
-  await check('卡片按钮「版本历史」：展开后加载出 release 列表，再点收起', async () => {
-    await cdp.eval(`document.querySelector('.repo-card[data-id="facebook/react"] [data-action="releases"]').click()`);
-    await cdp.waitFor(`document.querySelectorAll('.repo-card[data-id="facebook/react"] .release-item .tag').length > 0`, { timeout: 25000, label: 'release 列表出现' });
-    const info = await cdp.eval(`(() => {
-      const c = document.querySelector('.repo-card[data-id="facebook/react"]');
+  await check('版本历史：卡片固定 3 行窗口，滚动不改变卡片高度（回归：展开把邻居撑高）', async () => {
+    // 懒加载由 IntersectionObserver 触发，等它出现（最多 10 秒）
+    let ready = false;
+    for (let i = 0; i < 40; i++) {
+      ready = await cdp.eval("!!document.querySelector('.releases-window:not([hidden]) .release-item')");
+      if (ready) break;
+      await sleep(250);
+    }
+    assert(ready, '没有加载出任何版本窗口');
+    const before = await cdp.eval(`(() => {
+      const cards = [...document.querySelectorAll('.repo-card')];
+      const win = document.querySelector('.releases-window:not([hidden])');
+      const scroll = win.querySelector('.releases-scroll');
       return {
-        expanded: c.querySelector('[data-action="releases"]').getAttribute('aria-expanded'),
-        icon: c.querySelector('[data-action="releases"] svg')._iconName,
-        items: c.querySelectorAll('.release-item').length,
-        hidden: c.querySelector('[data-field="releases"]').hidden,
-        first: c.querySelector('.release-item .tag').textContent,
+        heights: cards.map((c) => Math.round(c.getBoundingClientRect().height)),
+        winH: Math.round(win.getBoundingClientRect().height),
+        items: scroll.querySelectorAll('.release-item').length,
+        visible: Math.round(scroll.clientHeight),
+        content: scroll.scrollHeight,
+        hint: win.querySelector('.releases-hint').textContent,
       };
     })()`);
-    assert(info.expanded === 'true' && info.hidden === false, JSON.stringify(info));
-    assert(info.icon === 'chevron-up', `箭头没翻转，实际 ${info.icon}`);
-    assert(info.items > 0, '没有 release 条目');
-    // 展开的内容在折叠区外，先把卡片滚进视野再拍，否则截图上什么都看不到
-    await cdp.eval(`document.querySelector('.repo-card[data-id="facebook/react"]').scrollIntoView({ block: 'center' })`);
-    await sleep(400);
-    const f = await cdp.shot('03-releases-expanded'); shotFiles.push(f);
-    await cdp.eval(`document.querySelector('.repo-card[data-id="facebook/react"] [data-action="releases"]').click()`);
-    await sleep(260);
-    const collapsed = await cdp.eval(`(() => { const c=document.querySelector('.repo-card[data-id="facebook/react"]'); return { hidden: c.querySelector('[data-field="releases"]').hidden, icon: c.querySelector('[data-action="releases"] svg')._iconName }; })()`);
-    assert(collapsed.hidden === true && collapsed.icon === 'chevron-down', JSON.stringify(collapsed));
-    return `展开 ${info.items} 条（首条 ${info.first}）→ 收起正常`;
+    assert(before.items >= 3, '版本窗口应至少 3 条：' + before.items);
+    assert(before.content > before.visible, '版本内容应超过可视高度（可滚动）：' + JSON.stringify(before));
+    assert(/滚轮/.test(before.hint), '缺少滚轮提示：' + before.hint);
+    assert(before.winH < 160, '版本窗口不应无限长：' + before.winH);
+    await cdp.eval("(() => { const s = document.querySelector('.releases-window:not([hidden]) .releases-scroll'); s.scrollTop = s.scrollHeight; return s.scrollTop; })()");
+    await sleep(250);
+    const after = await cdp.eval("(() => ({ heights: [...document.querySelectorAll('.repo-card')].map((c) => Math.round(c.getBoundingClientRect().height)) }))()");
+    assert(JSON.stringify(before.heights) === JSON.stringify(after.heights), '滚动版本窗口改变了卡片高度：' + JSON.stringify(before.heights) + ' → ' + JSON.stringify(after.heights));
+    return '窗口 ' + before.visible + '/' + before.content + 'px，' + before.items + ' 条；卡片高度不变';
   });
 
   await check('卡片「打开仓库」按钮与 Release 链接的 href 正确（含仓库改名后的真名）', async () => {

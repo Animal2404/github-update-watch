@@ -103,21 +103,39 @@ jobs:
             echo "拿不到 apksigner 或 APK，跳过指纹输出"
           fi
 
-      - name: 校验 APK 内容并改名
+      - name: 守卫 APK（资源 / 体积 / 固定签名）并生成 sha256
         run: |
           set -e
           VERSION="${RELEASE_TAG#v}"
           APK=$(find android/app/build/outputs/apk/release -name '*.apk' | head -1)
+          test -n "$APK"
           unzip -l "$APK" | grep -q 'assets/www/index.html'
+          unzip -l "$APK" | grep -q 'assets/www/app.js'
           unzip -l "$APK" | grep -q 'assets/www/github-core.js'
+          unzip -l "$APK" | grep -q 'assets/www/subs-core.js'
+          SIZE=$(stat -c%s "$APK")
+          echo "APK 体积：$SIZE bytes"
+          test "$SIZE" -gt 200000
           mkdir -p out
           cp "$APK" "out/GitHubUpdateWatch-${VERSION}.apk"
+          sha256sum "out/GitHubUpdateWatch-${VERSION}.apk" | awk '{print $1}' > "out/GitHubUpdateWatch-${VERSION}.apk.sha256"
+          if [ -f android/keystore.properties ]; then
+            APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | tail -1)
+            CERT=$("$APKSIGNER" verify --print-certs "$APK" | awk -F': ' '/Signer #1 certificate SHA-256 digest/{print $2}' | tr -d '\r :' | tr '[:lower:]' '[:upper:]' | sed 's/../&:/g; s/:$//')
+            echo "cert=$CERT"
+            if [ "$CERT" != "B1:E8:30:62:DC:81:F2:91:24:F8:2E:86:82:B7:31:FE:27:A6:DB:FD:71:1C:29:AE:93:25:9C:CC:79:CC:B5:EB" ]; then
+              echo "::error title=签名不一致::APK 证书 $CERT ≠ 固定证书 B1:E8:30:62:DC:81:F2:91:24:F8:2E:86:82:B7:31:FE:27:A6:DB:FD:71:1C:29:AE:93:25:9C:CC:79:CC:B5:EB"
+              exit 1
+            fi
+          fi
           ls -lh out/
 
       - uses: actions/upload-artifact@v4
         with:
           name: release-apk
-          path: out/*.apk
+          path: |
+            out/*.apk
+            out/*.sha256
           if-no-files-found: error
 
   desktop:
@@ -371,7 +389,7 @@ jobs:
         run: |
           set -e
           mkdir -p out
-          find files -type f \( -name '*.apk' -o -name '*.exe' \) -exec cp {} out/ \;
+          find files -type f \( -name '*.apk' -o -name '*.exe' -o -name '*.sha256' \) -exec cp {} out/ \;
           ls -lh out/
 
       - name: 写 Release 说明
@@ -390,7 +408,8 @@ jobs:
           自定义 GitHub 项目列表，记下每个项目当前最新版本作为基线，之后每次检查告诉你**有没有发新版本**。
 
           - 添加项目支持完整链接 / `owner/repo` / `git@github.com:owner/repo.git`
-          - 单独检查或全部检查（并发 3、带进度）、版本历史（最近 10 个 Release）
+          - 打开即自动检查所有项目；单独检查或全部检查（并发 3、带进度）
+          - 卡片固定显示最近 3 个版本，滚轮 / 滑动查看更早版本（不再点开撑高邻居）
           - 「标记已读」把当前最新版记为基线；无更新时自动禁用并说明原因
           - 搜索、按状态过滤（全部/有更新/无更新/有问题）、深色/浅色主题（图标带 morph 变形）
           - 发现新版本时弹系统通知（桌面走 Web Notification，安卓走原生通知）
@@ -402,7 +421,8 @@ jobs:
           `api.github.com`（数据存本机 localStorage）。所以手机和电脑的功能是一致的。
 
           > 构建信息：本页文件全部由 GitHub Actions 云端编译（见 `.github/workflows/release.yml`），
-          > 安卓包为 debug 签名，仅供自用体验；正式分发请替换成自己的 keystore。
+          > 安卓包使用仓库固定的 release keystore 签名，从 1.1.1 起可直接覆盖安装；
+          > 1.0.x 是临时 debug 签名，首次升级仍需卸载一次。应用内更新会下载新版 APK 并交给系统安装器确认。
           EOF
           cat notes.md
 

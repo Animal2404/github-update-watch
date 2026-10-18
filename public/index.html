@@ -40,6 +40,7 @@
         <label class="sr-only" for="searchInput">搜索项目</label>
         <input class="input" id="searchInput" type="search" placeholder="搜索项目…" autocomplete="off">
       </div>
+      <button class="btn btn-sm btn-update" id="updateBtn" type="button" hidden></button>
       <button class="btn btn-icon btn-outline" id="themeBtn" type="button" aria-label="切换深色/浅色主题" title="切换主题">
         <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path data-icon="moon"></path></svg>
       </button>
@@ -105,7 +106,8 @@
         </div>
         <button class="btn btn-primary" id="subAddBtn" type="submit">导入</button>
       </form>
-      <p class="hint" id="subHint">额度来自订阅响应头 <code>subscription-userinfo</code>；链接只存在本机（服务端加密），界面只显示脱敏形式。</p>
+      <p class="sub-purpose"><b>这个面板只做两件事</b>：读取订阅的总流量 / 到期时间，并统计节点数量。它不是代理客户端——选节点、测延迟、连线路请用 FlClash 或 mihomo。额度只有机场在响应头 <code>subscription-userinfo</code> 里返回时才有，没有就显示“未知”，不会编造每个节点的额度。</p>
+      <p class="hint" id="subHint">链接只存在本机（桌面端加密落盘），界面只显示脱敏形式。</p>
       <div id="subList" class="sub-list"></div>
     </section>
 

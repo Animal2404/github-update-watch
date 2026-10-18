@@ -119,4 +119,5 @@ tasks.matching { it.name == 'assembleRelease' }.configureEach { dependsOn 'print
 
 dependencies {
     implementation 'androidx.webkit:webkit:1.11.0'
+    implementation 'androidx.core:core:1.13.1'   // FileProvider（应用内更新安装 APK）
 }

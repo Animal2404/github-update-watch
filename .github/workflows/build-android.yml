@@ -104,21 +104,42 @@ jobs:
             echo "拿不到 apksigner 或 APK，跳过指纹输出"
           fi
 
-      - name: 校验 APK 内确实打进了网页资源
+      - name: 守卫 APK（资源 / 体积 / 固定签名）——空壳或换签名不许再发布
         run: |
           set -e
-          APK=$(find android/app/build/outputs/apk -name '*.apk' | head -1)
+          APK=$(find android/app/build/outputs/apk/release -name '*.apk' | head -1)
+          test -n "$APK"
           echo "检查 $APK"
           unzip -l "$APK" | tee apk-contents.txt | grep -q 'assets/www/index.html'
+          unzip -l "$APK" | grep -q 'assets/www/app.js'
           unzip -l "$APK" | grep -q 'assets/www/github-core.js'
+          unzip -l "$APK" | grep -q 'assets/www/subs-core.js'
           unzip -l "$APK" | grep -q 'assets/www/vendor/morphicons/dom.js'
           unzip -l "$APK" | grep -q 'assets/www/styles.css'
-          echo "网页资源已打进 APK"
+          SIZE=$(stat -c%s "$APK")
+          echo "APK 体积：$SIZE bytes"
+          test "$SIZE" -gt 200000
+          sha256sum "$APK" | awk '{print $1}' > "$APK.sha256"
+          echo "sha256: $(cat "$APK.sha256")"
+          if [ -f android/keystore.properties ]; then
+            APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | tail -1)
+            CERT=$("$APKSIGNER" verify --print-certs "$APK" | awk -F': ' '/Signer #1 certificate SHA-256 digest/{print $2}' | tr -d '\r :' | tr '[:lower:]' '[:upper:]' | sed 's/../&:/g; s/:$//')
+            echo "cert=$CERT"
+            if [ "$CERT" != "B1:E8:30:62:DC:81:F2:91:24:F8:2E:86:82:B7:31:FE:27:A6:DB:FD:71:1C:29:AE:93:25:9C:CC:79:CC:B5:EB" ]; then
+              echo "::error title=签名不一致::APK 证书 $CERT ≠ 固定证书 B1:E8:30:62:DC:81:F2:91:24:F8:2E:86:82:B7:31:FE:27:A6:DB:FD:71:1C:29:AE:93:25:9C:CC:79:CC:B5:EB，升级会失败"
+              exit 1
+            fi
+          else
+            echo "::warning title=签名回退::未配置固定 keystore，本次 APK 只能全新安装"
+          fi
+          echo "网页资源、体积、签名检查通过"
 
       - uses: actions/upload-artifact@v4
         with:
           name: android-apk
-          path: android/app/build/outputs/apk/**/*.apk
+          path: |
+            android/app/build/outputs/apk/**/*.apk
+            android/app/build/outputs/apk/**/*.sha256
           if-no-files-found: error
 
       - name: 记录 APK 体积

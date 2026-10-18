@@ -157,6 +157,37 @@ GitHub 未认证的 API 额度是 **60 次/小时/IP**，界面右上角有实�
 
 ## 设计说明（三个 UI 技能各自的落点）
 
+### 2026-10 第三轮（1.3.0）：手机端修复 + 应用内更新 + 版本窗口
+
+**为什么 APK 只有 471 KB**
+- 安卓包是 **WebView 壳**：界面资源在 `assets/www`（约 100 KB），运行时用系统 WebView 渲染，不打包 Chromium。
+  74.6 MB 的 EXE 是 Electron，里面自带一整个 Chromium，所以体积差两个数量级是正常的，不是空壳。
+- 现在 CI 会把 APK 解包检查 `assets/www/app.js` / `subs-core.js`、体积下限、固定签名证书；任何一项不对就**不发布**。
+
+**手机端上下栏**
+- 状态栏/导航栏颜色原来写死成旧的深蓝 `#0F172A`，亮色主题下也还是深色。现在由网页 `applyTheme()` 通过 `AndroidTheme` 桥同步：
+  深色 → `#09090B`，亮色 → 白色，并切换图标明暗（`SYSTEM_UI_FLAG_LIGHT_STATUS_BAR` / `LIGHT_NAVIGATION_BAR`）。
+- 系统栏颜色跟随主题后，顶部/底部不会再出现一条和页面不搭的深色条。
+
+**手机上订阅导入失败**
+- 根因是 WebView 里的 `fetch` 受 CORS 限制，且 `subscription-userinfo` 不在 exposed headers 里——这两点在浏览器里都绕不过去。
+- 现在订阅请求走原生 `AndroidHttp` 桥（`HttpURLConnection`，读取 status/全部响应头/正文），网页只负责解析，额度和节点数都能拿到。
+- 同时允许 `http` 订阅（`usesCleartextTraffic`），并保留失败时的真实错误文案。
+
+**应用内更新**
+- 顶部出现「新版本 vX」按钮（每 6 小时最多查一次）：
+  - 安卓：原生 HEAD `releases/latest` 取最新 tag（不耗 REST 额度）→ DownloadManager 下载 APK → FileProvider + 系统安装器确认安装。
+  - 桌面/网页：GitHub API 取最新 Release，点击直接下载 Setup 安装包（不需要再去 Releases 页找）。
+- 安卓 13+ 首次安装需允许「安装未知来源应用」；签名固定，覆盖安装不会再报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`。
+
+**版本窗口与启动检查**
+- 卡片直接显示**最近 3 个版本**的固定高度窗口，滚轮/滑动查看更早版本；不再有「展开/收起」按钮。
+  配合 `align-items: start`，展开把邻居卡片撑高的问题从结构上消失。
+- 每次打开软件自动检查全部项目（10 分钟内重复启动不重复检查，避免打爆 60 次/小时额度）；手动「全部检查」仍然可用。
+
+**节点面板**
+- 明确写成「只读订阅额度」：显示已用/总量、剩余、到期、节点数与协议分布。
+- 删除了没有用途的节点名单——这个 App 不是代理客户端，不能选中节点、也不能给每个节点单独限额；选节点/测延迟请用 FlClash / mihomo。
 ### 2026-10 第二轮（1.2.0）：shadcn 中性主题 + 订阅额度
 
 - **配色换成 shadcn 默认气质**：中性 zinc 底 + 单一前景色主按钮；删掉绿色渐变 logo、彩色阴影和所有硬编码色。
