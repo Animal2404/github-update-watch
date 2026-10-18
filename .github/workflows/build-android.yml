@@ -79,7 +79,12 @@ jobs:
           APK=$(find android/app/build/outputs/apk -name '*.apk' | head -1)
           APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | tail -1)
           if [ -n "$APKSIGNER" ] && [ -n "$APK" ]; then
-            "$APKSIGNER" verify --print-certs "$APK" | grep -E 'Signer #1 certificate (DN|SHA-256)' || true
+            {
+              echo '### APK 签名指纹'
+              echo '```'
+              "$APKSIGNER" verify --print-certs "$APK" | grep -E 'Signer #1 certificate (DN|SHA-256)' || true
+              echo '```'
+            } | tee -a "$GITHUB_STEP_SUMMARY"
           else
             echo "拿不到 apksigner 或 APK，跳过指纹输出"
           fi
