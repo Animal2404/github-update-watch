@@ -42,9 +42,34 @@ jobs:
         with:
           gradle-version: '8.7'
 
+      - name: 配置签名（有 Secrets 才用固定 key）
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/guw-release.jks"
+            echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/guw-release.jks" >> "$GITHUB_ENV"
+            echo "签名：使用仓库 Secrets 里的固定 release key"
+          else
+            echo "::warning title=签名回退::未配置 ANDROID_KEYSTORE_BASE64，本次仍用 debug 签名；每次构建签名都不同，装过旧版的设备无法覆盖安装"
+          fi
+
       - name: 编译 debug 与 release APK
         working-directory: android
         run: gradle assembleDebug assembleRelease --no-daemon --stacktrace
+
+      - name: 打印 APK 签名指纹（升级前核对用）
+        run: |
+          APK=$(find android/app/build/outputs/apk -name '*.apk' | head -1)
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | tail -1)
+          if [ -n "$APKSIGNER" ] && [ -n "$APK" ]; then
+            "$APKSIGNER" verify --print-certs "$APK" | grep -E 'Signer #1 certificate (DN|SHA-256)' || true
+          else
+            echo "拿不到 apksigner 或 APK，跳过指纹输出"
+          fi
 
       - name: 校验 APK 内确实打进了网页资源
         run: |

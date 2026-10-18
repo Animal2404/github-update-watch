@@ -238,6 +238,51 @@ node tools/verify-direct.mjs              # 直连模式 9 项（含系统通知
 | 本机服务被网页跨站调用 | 校验 `Host` 头（只放行 127.0.0.1 / localhost / ::1），挡 DNS rebinding | 同用户下的本地进程 |
 | Token 静止数据 | AES-256-GCM 加密落盘，密钥 0600 分文件 | 同账号恶意进程、APK 的 localStorage |
 
+## 安卓签名（能不能覆盖安装就看这个）
+
+**症状**：新 APK 提示"签名不一致，无法安装/覆盖"，只能先卸载。
+
+**根因**：`release` 以前直接复用 `signingConfigs.debug`，而 GitHub Actions 的 runner 每次都是干净环境，
+Android Gradle Plugin 会**重新生成** `~/.android/debug.keystore`。于是每个 release 的签名都不一样。
+（旧包那把临时密钥已经不存在了，所以这一次仍然需要**卸载一次**；之后不会再变。）
+
+**现在的做法**：
+
+1. 固定密钥放在仓库外：`E:\DeepSeek\zmb\guw-signing\guw-release.jks`（另有 `PASSWORDS.txt` 与 `guw-release.jks.base64`）。
+   **务必离线备份**，丢了就再也无法覆盖升级。
+2. 在仓库 Settings → Secrets and variables → Actions 添加 4 个 secret：
+
+   | Secret | 值 |
+   | --- | --- |
+   | `ANDROID_KEYSTORE_BASE64` | `guw-release.jks.base64` 的内容（单行） |
+   | `ANDROID_KEYSTORE_PASSWORD` | `PASSWORDS.txt` 里的 storePwd |
+   | `ANDROID_KEY_ALIAS` | `guw` |
+   | `ANDROID_KEY_PASSWORD` | `PASSWORDS.txt` 里的 keyPwd |
+
+   或用 `gh`（先 `gh auth login`）：
+
+   ```powershell
+   gh secret set ANDROID_KEYSTORE_BASE64 --repo Animal2404/github-update-watch < E:\DeepSeek\zmb\guw-signing\guw-release.jks.base64
+   gh secret set ANDROID_KEYSTORE_PASSWORD --repo Animal2404/github-update-watch
+   gh secret set ANDROID_KEY_ALIAS --repo Animal2404/github-update-watch --body guw
+   gh secret set ANDROID_KEY_PASSWORD --repo Animal2404/github-update-watch
+   ```
+
+3. 配好之后重新跑一次 release（Actions → release → Run workflow，tag 填 `v1.1.0`），
+   APK 会用固定密钥重签并覆盖 Release 上的同名资产。
+4. 之后每次发版的 APK 签名一致，可以直接覆盖安装。
+
+**当前密钥的证书指纹（SHA-256）**：
+
+```
+B1:E8:30:62:DC:81:F2:91:24:F8:2E:86:82:B7:31:FE:27:A6:DB:FD:71:1C:29:AE:93:25:9C:CC:79:CC:B5:EB
+```
+
+CI 构建日志里会打印实际 APK 的 `Signer #1 certificate SHA-256`，对不上就说明密钥没生效。
+
+**版本号**：`versionName` 与 `versionCode` 现在从 `package.json` 推导（1.1.0 → 10100），
+不再写死 `1.0.0`/`1`——否则覆盖安装时系统可能把它当成同版本或降级。
+
 ## 已知限制
 
 - 只认 GitHub（不支持 GitLab/自建 Gitea）。
@@ -247,7 +292,8 @@ node tools/verify-direct.mjs              # 直连模式 9 项（含系统通知
 - Token 加密只保护"文件被单独带走"这一种场景，不是系统钥匙串。
 - 手机版与电脑版**功能一致但数据不互通**：APK 的数据在本机 localStorage 里，
   没有做跨设备同步（要做的话得加个后端或走 GitHub Gist 之类）。
-- APK 用的是 debug 签名（方便直接装来体验）；要正式发布请换成自己的 keystore。
+- 安卓的固定签名密钥**不在仓库里**：CI 从 4 个 Actions Secrets 读取，本地从 `android/keystore.properties` 读取
+  （见下节）。没有配 Secrets 时会回退 debug 签名，并打一条 warning——那种包**装不上旧版**。
 
 ## 重新生成图标（一般不需要）
 
