@@ -22,7 +22,10 @@ def gwVersionCode = versionMatcher.matches()
 // AGP 会重新生成 debug.keystore —— 于是每个 release 的签名都不一样，装过旧版的机器
 // 一律报"签名不一致，无法覆盖安装"。
 def keystoreProps = new Properties()
-def keystorePropsFile = file("${projectDir}/keystore.properties")
+// 根工程是 android/，CI 与本地都写 android/keystore.properties；
+// 同时兼容历史上放在 android/app/ 的写法。
+def keystorePropsFile = rootProject.file('keystore.properties')
+if (!keystorePropsFile.exists()) keystorePropsFile = file("${projectDir}/keystore.properties")
 if (keystorePropsFile.exists()) {
     keystorePropsFile.withInputStream { keystoreProps.load(it) }
 }
