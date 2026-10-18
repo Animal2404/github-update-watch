@@ -132,8 +132,7 @@ jobs:
           sha256sum "$APK" | awk '{print $1}' > "$APK.sha256"
           echo "sha256: $(cat "$APK.sha256")"
           if [ -f android/keystore.properties ]; then
-            APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | tail -1)
-            CERT=$("$APKSIGNER" verify --print-certs "$APK" | awk -F': ' '/Signer #1 certificate SHA-256 digest/{print $2}' | tr -d '\r :' | tr '[:lower:]' '[:upper:]' | sed 's/../&:/g; s/:$//')
+            CERT=$(node tools/apk-cert.mjs "$APK")
             echo "cert=$CERT"
             if [ "$CERT" != "B1:E8:30:62:DC:81:F2:91:24:F8:2E:86:82:B7:31:FE:27:A6:DB:FD:71:1C:29:AE:93:25:9C:CC:79:CC:B5:EB" ]; then
               echo "::error title=签名不一致::APK 证书 $CERT ≠ 固定证书 B1:E8:30:62:DC:81:F2:91:24:F8:2E:86:82:B7:31:FE:27:A6:DB:FD:71:1C:29:AE:93:25:9C:CC:79:CC:B5:EB，升级会失败"
