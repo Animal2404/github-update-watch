@@ -49,12 +49,27 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          # 注意：step 级 env 只对当前 step 生效，不会传给后面的 Gradle 步骤。
+          # 所以这里把四个值直接落成 android/keystore.properties（Gradle 会读），
+          # 而不是只往 $GITHUB_ENV 写一个 PATH —— 上次就是这么"看起来配了、其实没生效"。
           if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
             printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/guw-release.jks"
-            echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/guw-release.jks" >> "$GITHUB_ENV"
-            echo "签名：使用仓库 Secrets 里的固定 release key"
+            {
+              echo "storeFile=$RUNNER_TEMP/guw-release.jks"
+              echo "storePassword=$ANDROID_KEYSTORE_PASSWORD"
+              echo "keyAlias=$ANDROID_KEY_ALIAS"
+              echo "keyPassword=$ANDROID_KEY_PASSWORD"
+            } > android/keystore.properties
+            echo "签名：使用仓库 Secrets 里的固定 release key（已写入 android/keystore.properties）"
           else
             echo "::warning title=签名回退::未配置 ANDROID_KEYSTORE_BASE64，本次仍用 debug 签名；每次构建签名都不同，装过旧版的设备无法覆盖安装"
+          fi
+      - name: 核对签名配置确实生效
+        run: |
+          if [ -f android/keystore.properties ]; then
+            grep -q '^storeFile=' android/keystore.properties && echo "keystore.properties 已就绪"
+          else
+            echo "keystore.properties 不存在（将回退 debug）"
           fi
 
       - name: 编译 debug 与 release APK
