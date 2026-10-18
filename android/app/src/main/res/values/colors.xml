@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 与网页暗色主题的 --background 保持一致 -->
+    <!-- 与网页暗色主题的 background 令牌保持一致 -->
     <color name="brand_bg">#09090B</color>
     <color name="brand_green">#22C55E</color>
     <color name="ic_launcher_background">#09090B</color>
