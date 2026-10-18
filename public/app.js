@@ -38,6 +38,9 @@ const httpBackend = {
   reset: (id) => api(`/api/repos/${encodeURIComponent(id)}/reset`, { method: 'POST' }),
   releases: (id) => api(`/api/repos/${encodeURIComponent(id)}/releases`),
   checkAll: () => api('/api/check-all', { method: 'POST' }),
+  addSub: (input, name) => api('/api/subs', { method: 'POST', body: { input, name } }),
+  refreshSub: (id) => api('/api/subs/' + encodeURIComponent(id) + '/refresh', { method: 'POST' }),
+  removeSub: (id) => api('/api/subs/' + encodeURIComponent(id), { method: 'DELETE' }),
   setToken: (token) => api('/api/settings', { method: 'POST', body: { token } }),
 };
 
@@ -50,10 +53,10 @@ const directBackend = (() => {
     const text = await r.text();
     let body = null;
     try { body = JSON.parse(text); } catch { /* 忽略 */ }
-    return { status: r.status, text, body };
+    return { status: r.status, text, body, headers: Object.fromEntries(r.headers.entries()) };
   };
   const github = createGithub({ fetchText });
-  const store = createStore({ github, load, save });
+  const store = createStore({ github, load, save, fetchText });
   let rateCache = { at: 0, value: null };
   return {
     kind: 'direct',
@@ -74,6 +77,9 @@ const directBackend = (() => {
     reset: (id) => store.reset(id),
     releases: (id) => store.releases(id),
     checkAll: async () => { store.checkAll().catch(() => {}); return { started: store.repos.length }; },
+    addSub: (input, name) => store.addSubscription(input, name),
+    refreshSub: (id) => store.refreshSubscription(id),
+    removeSub: (id) => store.removeSubscription(id),
     setToken: (token) => store.setToken(token),
   };
 })();
@@ -141,11 +147,22 @@ function initAllIcons(root = document) {
 }
 
 // ---------------------------------------------------------------- 状态
-const state = { repos: [], filter: 'all', query: '', job: null, hasToken: false, rate: null, transport: null, lastRunAt: null };
+const state = { repos: [], subscriptions: [], filter: 'all', query: '', job: null, hasToken: false, rate: null, transport: null, lastRunAt: null };
 const $ = (sel) => document.querySelector(sel);
 const grid = $('#grid');
 const emptyState = $('#emptyState');
 const cards = new Map();      // id -> { el, sig }
+
+// 分段过滤器的滑块：位置永远由「当前选中的 chip」实测决定。
+// 不能写死索引——四个 chip 宽度不同，字体加载完成后还会变（只量一次就会错位）。
+const filtersEl = document.querySelector('.filters');
+function updateFilterThumb() {
+  if (!filtersEl) return;
+  const active = filtersEl.querySelector('.chip[aria-pressed="true"]');
+  if (!active) return;
+  filtersEl.style.setProperty('--thumb-x', active.offsetLeft + 'px');
+  filtersEl.style.setProperty('--thumb-w', active.offsetWidth + 'px');
+}
 
 // ---------------------------------------------------------------- Toast
 function toast(message, kind = 'info', ms = 4200) {
@@ -412,6 +429,7 @@ function renderGrid() {
   $('#countUpdate').textContent = counts.update;
   $('#countClean').textContent = counts.clean;
   $('#countError').textContent = counts.error;
+  updateFilterThumb();
 
   const noMatch = total > 0 && visible.length === 0;
   emptyState.hidden = total > 0;
@@ -462,12 +480,13 @@ async function refresh({ quiet = false } = {}) {
   try {
     const data = await backend.state();
     state.repos = data.repos || [];
+    state.subscriptions = data.subscriptions || [];
     state.job = data.job || null;
     state.hasToken = !!data.hasToken;
     state.rate = data.rate || null;
     state.transport = data.transport || null;
     state.lastRunAt = data.lastRunAt || null;
-    renderGrid(); renderHeader(); renderJob();
+    renderGrid(); renderHeader(); renderJob(); renderSubs();
     return data;
   } catch (e) {
     if (!quiet) toast(`读取状态失败：${e.message}`, 'error');
@@ -658,6 +677,7 @@ function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   localStorage.setItem('guw-theme', theme);
   morph($('#themeBtn').querySelector('svg'), theme === 'dark' ? 'moon' : 'sun');
+  requestAnimationFrame(updateFilterThumb);
 }
 $('#themeBtn').addEventListener('click', () => {
   applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
@@ -715,10 +735,187 @@ $('#confirmCancelBtn').addEventListener('click', () => { confirmEl.close(); conf
 $('#confirmOkBtn').addEventListener('click', () => { confirmEl.close(); confirmResolve?.(true); confirmResolve = null; });
 confirmEl.addEventListener('cancel', (ev) => { ev.preventDefault(); confirmEl.close(); confirmResolve?.(false); confirmResolve = null; });
 
+// ---------------------------------------------------------------- 节点订阅
+const SUBS_OPEN = new Set();   // 哪些订阅展开了节点列表（刷新后保持）
+
+function fmtBytes(n) {
+  if (n == null) return '—';
+  var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  var v = Number(n);
+  var i = 0;
+  while (v >= 1024 && i < units.length - 1) { v = v / 1024; i++; }
+  var text = (i === 0 || v >= 100) ? Math.round(v) : v.toFixed(1);
+  return text + ' ' + units[i];
+}
+
+function subStatus(sub) {
+  if (sub.error) return { cls: 'badge-error', text: '拉取失败', icon: 'circle-alert' };
+  if (sub.quota && sub.quota.expired) return { cls: 'badge-warn', text: '已过期', icon: 'clock' };
+  if (sub.quota && !sub.quota.unlimited && sub.quota.percent >= 90) return { cls: 'badge-error', text: '额度将尽', icon: 'triangle-alert' };
+  if (sub.nodes && sub.nodes.count > 0) return { cls: 'badge-clean', text: '已同步', icon: 'circle-check' };
+  return { cls: 'badge-warn', text: '没有节点', icon: 'circle-alert' };
+}
+
+function subCardHtml(sub) {
+  var q = sub.quota;
+  var st = subStatus(sub);
+  var pct = (q && !q.unlimited) ? Math.min(100, q.percent) : 0;
+  var level = (q && !q.unlimited) ? (q.percent >= 90 ? 'danger' : q.percent >= 70 ? 'warn' : '') : '';
+  var usedText = q
+    ? (q.unlimited ? '已用 ' + fmtBytes(q.used) : '已用 ' + fmtBytes(q.used) + ' / ' + fmtBytes(q.total))
+    : '额度未知';
+  var rightText = '';
+  if (q) {
+    rightText = q.unlimited ? '不限流量' : '剩 ' + fmtBytes(q.remaining);
+    if (q.expireAt) rightText += ' · ' + (q.expired ? '已过期' : '到期 ' + q.expireAt.slice(0, 10) + '（' + q.daysLeft + ' 天）');
+    else rightText += ' · 长期有效';
+  }
+  var protos = '';
+  var protocols = (sub.nodes && sub.nodes.protocols) || {};
+  Object.keys(protocols).slice(0, 6).forEach(function (key) {
+    protos += '<span class="proto">' + esc(key) + ' ' + protocols[key] + '</span>';
+  });
+  var expanded = SUBS_OPEN.has(sub.id);
+  var nodeRows = '';
+  var nodes = (sub.nodes && sub.nodes.nodes) || [];
+  nodes.slice(0, 200).forEach(function (node) {
+    nodeRows += '<div class="sub-node"><span>' + esc(node.name) + '</span><span class="type">' + esc(node.type || '') + '</span></div>';
+  });
+  if (!nodeRows) nodeRows = '<div class="sub-node">没有解析到节点</div>';
+
+  var html = '';
+  html += '<article class="card sub-card" data-sub-id="' + esc(sub.id) + '">';
+  html += '<div class="sub-head"><div class="sub-title">';
+  html += '<strong>' + esc(sub.name) + '</strong>';
+  html += '<span class="sub-host" title="链接已脱敏">' + esc(sub.maskedUrl) + '</span>';
+  html += '</div><span class="badge ' + st.cls + '">' + iconSvg(st.icon, 'icon icon-sm') + '<span>' + st.text + '</span></span></div>';
+
+  if (q) {
+    html += '<div class="quota">';
+    html += '<div class="quota-row"><span>' + esc(usedText) + '</span><span>' + esc(rightText) + '</span></div>';
+    html += '<div class="quota-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '" aria-label="已用流量">';
+    html += '<span class="quota-fill" data-level="' + level + '" style="width:' + pct + '%"></span></div>';
+    html += '</div>';
+  }
+
+  html += '<div class="sub-meta"><span>' + (sub.nodes ? sub.nodes.count : 0) + ' 个节点</span>' + protos;
+  html += '<span>更新 ' + fmtDate(sub.lastCheckedAt) + '</span></div>';
+  if (sub.error) html += '<div class="repo-error">' + esc(sub.error) + '</div>';
+
+  html += '<div class="sub-actions">';
+  html += '<button class="btn btn-sm btn-outline" type="button" data-sub-action="refresh">' + iconSvg('refresh-cw', 'icon icon-sm') + '<span>刷新</span></button>';
+  html += '<button class="btn btn-sm btn-ghost" type="button" data-sub-action="nodes" aria-expanded="' + expanded + '">' + iconSvg(expanded ? 'chevron-up' : 'chevron-down', 'icon icon-sm') + '<span>节点列表</span></button>';
+  html += '<button class="btn btn-sm btn-ghost btn-icon" type="button" data-sub-action="delete" aria-label="删除订阅">' + iconSvg('trash-2', 'icon icon-sm') + '</button>';
+  html += '</div>';
+
+  html += '<div class="sub-nodes" data-sub-nodes' + (expanded ? '' : ' hidden') + '>' + nodeRows + '</div>';
+  html += '</article>';
+  return html;
+}
+
+function renderSubs() {
+  var list = $('#subList');
+  if (!list) return;
+  var subs = state.subscriptions || [];
+  var summary = $('#subSummary');
+  if (summary) summary.textContent = subs.length ? (subs.length + ' 个订阅') : '导入机场订阅，查看流量额度与节点';
+  if (!subs.length) {
+    list.innerHTML = '<p class="sub-empty">还没有订阅。粘贴机场的订阅链接即可读取总流量、到期时间和节点数。</p>';
+    return;
+  }
+  list.innerHTML = subs.map(subCardHtml).join('');
+  initAllIcons(list);
+}
+
+$('#subForm').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  var input = $('#subInput');
+  var nameEl = $('#subName');
+  var hint = $('#subHint');
+  var btn = $('#subAddBtn');
+  var value = input.value.trim();
+  if (!value) {
+    hint.className = 'hint is-error';
+    hint.textContent = '请先填订阅链接。';
+    input.setAttribute('aria-invalid', 'true');
+    input.focus();
+    return;
+  }
+  btn.disabled = true;
+  try {
+    var res = await backend.addSub(value, nameEl.value.trim());
+    input.value = '';
+    nameEl.value = '';
+    input.removeAttribute('aria-invalid');
+    hint.className = 'hint';
+    hint.textContent = '额度来自订阅响应头 subscription-userinfo；链接只存在本机（服务端加密），界面只显示脱敏形式。';
+    toast(res.note || '已导入', res.subscription && res.subscription.error ? 'error' : 'success');
+    await refresh({ quiet: true });
+  } catch (e) {
+    hint.className = 'hint is-error';
+    hint.textContent = e.message;
+    input.setAttribute('aria-invalid', 'true');
+    input.focus();
+    toast(e.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('#subList').addEventListener('click', async (ev) => {
+  var btn = ev.target.closest('[data-sub-action]');
+  if (!btn) return;
+  var card = ev.target.closest('.sub-card');
+  var id = card ? card.dataset.subId : '';
+  var sub = (state.subscriptions || []).find(function (item) { return item.id === id; });
+  if (!sub) return;
+  var action = btn.dataset.subAction;
+
+  if (action === 'nodes') {
+    var box = card.querySelector('[data-sub-nodes]');
+    var expanded = btn.getAttribute('aria-expanded') === 'true';
+    btn.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+    box.hidden = expanded;
+    if (expanded) SUBS_OPEN.delete(id); else SUBS_OPEN.add(id);
+    return;
+  }
+
+  if (action === 'delete') {
+    var ok = await confirmDialog('确定要移除订阅 <strong>' + esc(sub.name) + '</strong> 吗？');
+    if (!ok) return;
+    try {
+      await backend.removeSub(id);
+      SUBS_OPEN.delete(id);
+      toast('已移除订阅 ' + sub.name, 'success');
+      await refresh({ quiet: true });
+    } catch (e) { toast(e.message, 'error'); }
+    return;
+  }
+
+  if (action === 'refresh') {
+    btn.disabled = true;
+    setBusy(btn.querySelector('svg'), true);
+    try {
+      var res = await backend.refreshSub(id);
+      toast(res.note || '已刷新', res.subscription && res.subscription.error ? 'error' : 'info');
+      await refresh({ quiet: true });
+    } catch (e) {
+      toast(e.message, 'error');
+      setBusy(btn.querySelector('svg'), false, 'refresh-cw');
+    } finally {
+      btn.disabled = false;
+    }
+  }
+});
+
 // ---------------------------------------------------------------- 启动
 (async function boot() {
   initAllIcons();
   applyTheme(localStorage.getItem('guw-theme') || 'dark');
+  requestAnimationFrame(updateFilterThumb);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(updateFilterThumb).catch(() => {});
+  if (filtersEl && typeof ResizeObserver !== 'undefined') new ResizeObserver(updateFilterThumb).observe(filtersEl);
+  window.addEventListener('resize', updateFilterThumb);
   // 骨架屏：等待首次数据
   grid.innerHTML = Array.from({ length: 3 }, () => `
     <div class="card skeleton-card" aria-hidden="true">
@@ -754,6 +951,6 @@ confirmEl.addEventListener('cancel', (ev) => { ev.preventDefault(); confirmEl.cl
 
 // 供自动化验证脚本读取内部状态的测试钩子（只读，不改变行为）
 window.__guw = {
-  get state() { return { repos: state.repos, filter: state.filter, query: state.query, job: state.job, hasToken: state.hasToken, transport: state.transport, theme: document.documentElement.dataset.theme, backend: backend.kind }; },
+  get state() { return { repos: state.repos, subscriptions: state.subscriptions, filter: state.filter, query: state.query, job: state.job, hasToken: state.hasToken, transport: state.transport, theme: document.documentElement.dataset.theme, backend: backend.kind }; },
   icons,
 };

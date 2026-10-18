@@ -5,11 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GitHub 更新监测</title>
 <meta name="description" content="自定义 GitHub 项目列表，检测是否有新版本发布。">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2322c55e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12a9 9 0 1 1-2.64-6.36'/%3E%3Cpath d='M21 3v6h-6'/%3E%3C/svg%3E">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" media="print" onload="this.media='all'"
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12a9 9 0 1 1-2.64-6.36'/%3E%3Cpath d='M21 3v6h-6'/%3E%3C/svg%3E">
+<!-- 首帧前定主题：避免深色用户先看到白底再切换（原先在 boot 里才设置，会闪一下） -->
+<script>
+  (function () {
+    try {
+      document.documentElement.dataset.theme = localStorage.getItem('guw-theme') === 'light' ? 'light' : 'dark';
+    } catch (e) {
+      document.documentElement.dataset.theme = 'dark';
+    }
+  })();
+</script>
 <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -67,6 +73,7 @@
           <span id="checkAllLabel">全部检查</span>
         </button>
         <div class="filters" role="group" aria-label="按状态过滤">
+          <span class="filters-thumb" aria-hidden="true"></span>
           <button class="chip" type="button" data-filter="all" aria-pressed="true">全部 <span class="count" id="countAll">0</span></button>
           <button class="chip" type="button" data-filter="update" aria-pressed="false">有更新 <span class="count" id="countUpdate">0</span></button>
           <button class="chip" type="button" data-filter="clean" aria-pressed="false">无更新 <span class="count" id="countClean">0</span></button>
@@ -79,6 +86,28 @@
 
     <!-- 列表 -->
     <section id="grid" class="grid" aria-label="项目列表" aria-busy="true"></section>
+
+    <!-- 节点订阅：导入订阅 → 总额度/到期/节点数（额度来自订阅响应头，不是每个节点） -->
+    <section class="deck sub-deck" id="subDeck" aria-labelledby="subTitle">
+      <div class="toolbar-row">
+        <h2 class="deck-title" id="subTitle">节点订阅</h2>
+        <span class="muted-note" id="subSummary">导入机场订阅，查看流量额度与节点</span>
+      </div>
+      <form class="add-row" id="subForm" novalidate>
+        <div class="field">
+          <label class="sr-only" for="subInput">订阅链接</label>
+          <input class="input" id="subInput" type="url" autocomplete="off" spellcheck="false"
+                 placeholder="https://…/subscribe?token=…（Clash YAML 或 base64 节点列表）" aria-describedby="subHint">
+        </div>
+        <div class="field field-name">
+          <label class="sr-only" for="subName">备注名</label>
+          <input class="input" id="subName" type="text" autocomplete="off" placeholder="备注（可选）">
+        </div>
+        <button class="btn btn-primary" id="subAddBtn" type="submit">导入</button>
+      </form>
+      <p class="hint" id="subHint">额度来自订阅响应头 <code>subscription-userinfo</code>；链接只存在本机（服务端加密），界面只显示脱敏形式。</p>
+      <div id="subList" class="sub-list"></div>
+    </section>
 
     <div class="card empty" id="emptyState" hidden>
       <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path data-icon="inbox"></path></svg>

@@ -13,6 +13,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createGithub, createStore, AppError } from './public/github-core.js';
@@ -39,7 +40,9 @@ let transport = null;
 // 界面上的轮询就表现为"整个应用冻住"——网络问题被误读成 UI 卡死。
 function curlGet(url, headers, direct) {
   return new Promise((resolve, reject) => {
-    const args = ['-sS', '-L', '--max-time', String(Math.ceil(TIMEOUT_MS / 1000)), '-A', UA, '-w', '\\n%{http_code}'];
+    // 订阅额度在响应头 subscription-userinfo 里：curl 用 -D 落一个临时文件（-i 会和正文混在一起）
+    const headerFile = path.join(os.tmpdir(), 'guw-h-' + process.pid + '-' + Date.now() + '-' + Math.random().toString(16).slice(2) + '.txt');
+    const args = ['-sS', '-L', '-D', headerFile, '--max-time', String(Math.ceil(TIMEOUT_MS / 1000)), '-A', UA, '-w', '\\n%{http_code}'];
     if (direct) args.push('--noproxy', '*');
     for (const [k, v] of Object.entries(headers || {})) args.push('-H', `${k}: ${v}`);
     args.push(url);
@@ -62,12 +65,23 @@ function curlGet(url, headers, direct) {
     child.on('error', (e) => { clearTimeout(timer); reject(new Error(`curl spawn failed: ${e.message}`)); });
     child.on('close', (code) => {
       clearTimeout(timer);
+      let headersOut = {};
+      try {
+        const rawHeaders = fs.readFileSync(headerFile, 'utf8');
+        const blocks = rawHeaders.split(/\r?\n\r?\n/).filter((b) => b.trim());
+        const lastBlock = blocks[blocks.length - 1] || '';
+        for (const line of lastBlock.split(/\r?\n/)) {
+          const idx = line.indexOf(':');
+          if (idx > 0) headersOut[line.slice(0, idx).trim().toLowerCase()] = line.slice(idx + 1).trim();
+        }
+      } catch { /* 没有 header 文件就按空处理 */ }
+      try { fs.unlinkSync(headerFile); } catch { /* 忽略 */ }
       if (killed) return;                       // 超时/超限已经 reject 过
       const nl = out.lastIndexOf('\n');
       const status = Number(out.slice(nl + 1).trim());
       const text = out.slice(0, nl);
       if (code !== 0 && !status) return reject(new Error(`curl exit ${code}: ${(err.trim().split('\n')[0] || '').slice(0, 140)}`));
-      resolve({ status, text });
+      resolve({ status, text, headers: headersOut });
     });
   });
 }
@@ -81,14 +95,14 @@ export async function fetchText(url, headers = {}) {
       let res;
       if (name === 'fetch') {
         const r = await fetch(url, { headers: { 'user-agent': UA, ...headers }, signal: AbortSignal.timeout(TIMEOUT_MS), redirect: 'follow' });
-        res = { status: r.status, text: await r.text() };
+        res = { status: r.status, text: await r.text(), headers: Object.fromEntries(r.headers.entries()) };
       } else {
         res = await curlGet(url, headers, name === 'curl-direct');
       }
       transport = name;
       let body = null;
       try { body = JSON.parse(res.text); } catch { /* 非 JSON 也照常返回 */ }
-      return { status: res.status, text: res.text, body };
+      return { status: res.status, text: res.text, body, headers: res.headers || {} };
     } catch (e) {
       errs.push(`${name}: ${e.message}`);
       transport = null;
@@ -119,6 +133,18 @@ function load() {
       pendingTokenMigration = true;    // 0.1.0 之前留下的明文
     }
   }
+  // 订阅链接同样是凭据：落盘密文，读盘解密
+  if (Array.isArray(state.subscriptions)) {
+    for (const sub of state.subscriptions) {
+      if (!sub || typeof sub.url !== 'string' || !sub.url) continue;
+      if (isEncrypted(sub.url)) {
+        const plain = secrets.decrypt(sub.url);
+        sub.url = plain === null ? '' : plain;
+      } else {
+        pendingTokenMigration = true;   // 旧数据里的明文，下一次 save 转密文
+      }
+    }
+  }
   return state;
 }
 function save(state) {
@@ -126,6 +152,11 @@ function save(state) {
   // 内存里始终是明文（请求要用），落盘时统一加密；已经是密文的不会二次包装
   const out = { ...state, settings: { ...(state.settings || {}) } };
   if (out.settings.token) out.settings.token = secrets.encrypt(out.settings.token);
+  if (Array.isArray(out.subscriptions)) {
+    out.subscriptions = out.subscriptions.map((sub) => (
+      sub && sub.url ? { ...sub, url: secrets.encrypt(sub.url) } : sub
+    ));
+  }
   const tmp = `${STORE_FILE}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(out, null, 2), 'utf8');
   try { fs.chmodSync(tmp, 0o600); } catch { /* Windows 上基本 no-op */ }
@@ -133,11 +164,11 @@ function save(state) {
 }
 
 const github = createGithub({ fetchText });
-export const store = createStore({ github, load, save });
+export const store = createStore({ github, load, save, fetchText });
 // 明文 Token 迁移：一次写盘即完成，之后 load 读到的都是密文
 if (pendingTokenMigration) {
   try {
-    save({ repos: store.repos, settings: store.settings });
+    save({ repos: store.repos, subscriptions: store.subscriptions, settings: store.settings });
     pendingTokenMigration = false;
     console.log('[secret] 已把 repos.json 里的明文 Token 迁移为密文');
   } catch (e) {
@@ -224,6 +255,17 @@ export function createServer() {
         const started = store.repos.length;
         store.checkAll().catch(() => {});   // 后台跑，界面靠 /api/state 轮询 job
         return sendJson(res, 202, { started });
+      }
+      if (req.method === 'POST' && p === '/api/subs') {
+        const body = await readBody(req);
+        return sendJson(res, 201, await store.addSubscription(body?.input, body?.name));
+      }
+      const sm = /^\/api\/subs\/([^/]+)(?:\/(refresh))?$/.exec(p);
+      if (sm) {
+        const sid = decodeURIComponent(sm[1]);
+        const sa = sm[2];
+        if (req.method === 'DELETE') { store.removeSubscription(sid); return sendJson(res, 200, { ok: true }); }
+        if (req.method === 'POST' && sa === 'refresh') return sendJson(res, 200, await store.refreshSubscription(sid));
       }
       if (req.method === 'POST' && p === '/api/settings') {
         const body = await readBody(req);

@@ -19,6 +19,8 @@ export function esc(value) {
   ));
 }
 
+import { fetchSubscription, publicSubscription, subId, normalizeSubUrl, hostOf, maskUrl } from './subs-core.js';
+
 export const CACHE_TTL_MS = 3 * 60 * 1000;
 export const TIMEOUT_MS = 25000;
 const CONCURRENCY = 3;
@@ -233,13 +235,40 @@ export function publicRepo(r) {
  * @param load    () => { repos, settings } | null
  * @param save    (state) => void
  */
-export function createStore({ github, load, save }) {
+export function createStore({ github, load, save, fetchText }) {
   const persisted = load?.() || {};
   const repos = Array.isArray(persisted.repos) ? persisted.repos : [];
+  const subscriptions = Array.isArray(persisted.subscriptions) ? persisted.subscriptions : [];
   const settings = { token: '', lastRunAt: null, ...(persisted.settings || {}) };
   let job = null;
 
-  const persist = () => { try { save?.({ repos, settings }); } catch { /* 存储失败不该让功能崩掉 */ } };
+  const persist = () => { try { save?.({ repos, settings, subscriptions }); } catch { /* 存储失败不该让功能崩掉 */ } };
+  const bySubId = (id) => subscriptions.find((s) => s.id === String(id));
+
+  /** 订阅链接是凭据：错误信息里若带完整 URL，替换成脱敏形式 */
+  const safeSubError = (message, url) => {
+    const msg = String(message || '订阅拉取失败');
+    return url ? msg.split(url).join(maskUrl(url)) : msg;
+  };
+
+  async function checkSubscription(rec) {
+    if (typeof fetchText !== 'function') {
+      rec.error = '当前环境不支持拉取订阅';
+      return rec;
+    }
+    try {
+      const result = await fetchSubscription(fetchText, rec.url);
+      rec.quota = result.quota;
+      rec.format = result.format;
+      rec.nodes = { count: result.count, protocols: result.protocols, nodes: result.nodes.slice(0, 200) };
+      rec.lastCheckedAt = new Date().toISOString();
+      rec.error = null;
+    } catch (e) {
+      rec.error = safeSubError(e && e.message, rec.url);
+      rec.lastCheckedAt = new Date().toISOString();
+    }
+    return rec;
+  }
   const byId = (id) => repos.find((r) => r.id === String(id).toLowerCase());
 
   async function checkRepo(rec, { setBaseline = false, fresh = false } = {}) {
@@ -282,11 +311,13 @@ export function createStore({ github, load, save }) {
 
   return {
     get repos() { return repos; },
+    get subscriptions() { return subscriptions; },
     get settings() { return settings; },
     get job() { return job; },
 
     getState: (extra = {}) => ({
       repos: repos.map(publicRepo),
+      subscriptions: subscriptions.map(publicSubscription),
       job,
       hasToken: !!settings.token,
       tokenHint: settings.token ? `${settings.token.slice(0, 4)}••••${settings.token.slice(-4)}` : '',
@@ -303,6 +334,55 @@ export function createStore({ github, load, save }) {
       repos.unshift(rec);
       persist();
       return { repo: publicRepo(rec), note: rec.error ? `已添加，但首次检查失败：${rec.error}` : `已添加，基线 ${rec.baseline}` };
+    },
+
+    // ---------------------------------------------------------------- 节点订阅
+    async addSubscription(input, name) {
+      let url;
+      try { url = normalizeSubUrl(input); }
+      catch (e) { throw new AppError(e.message); }   // 交给服务端映射成 400，而不是 500
+      const id = subId(url);
+      if (bySubId(id) || subscriptions.some((s) => s.url === url)) throw new AppError('这个订阅已经在列表里了');
+      const rec = {
+        id,
+        url,
+        name: String(name || '').trim() || hostOf(url),
+        addedAt: new Date().toISOString(),
+        lastCheckedAt: null,
+        error: null,
+        format: null,
+        quota: null,
+        nodes: { count: 0, protocols: {}, nodes: [] },
+      };
+      await checkSubscription(rec);
+      subscriptions.unshift(rec);
+      persist();
+      const pub = publicSubscription(rec);
+      return {
+        subscription: pub,
+        note: rec.error
+          ? `已添加，但订阅拉取失败：${rec.error}`
+          : `已导入：${pub.nodes.count} 个节点${pub.quota && !pub.quota.unlimited ? `，已用 ${pub.quota.percent}%` : ''}`,
+      };
+    },
+
+    async refreshSubscription(id) {
+      const rec = bySubId(id);
+      if (!rec) throw new AppError('没有这个订阅');
+      await checkSubscription(rec);
+      persist();
+      return {
+        subscription: publicSubscription(rec),
+        note: rec.error ? `刷新失败：${rec.error}` : `已刷新：${rec.nodes.count} 个节点`,
+      };
+    },
+
+    removeSubscription(id) {
+      const i = subscriptions.findIndex((s) => s.id === String(id));
+      if (i < 0) throw new AppError('没有这个订阅');
+      subscriptions.splice(i, 1);
+      persist();
+      return { ok: true };
     },
 
     remove(id) {

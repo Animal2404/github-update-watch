@@ -202,28 +202,42 @@ try {
     return `停转正常，图标 ${busy.icon} → ${after.icon}`;
   });
 
-  await check('焦点环不会把胶囊按钮压成尖角矩形（回归：用户报过"尖锐的四边形"）', async () => {
+  await check('焦点环不改变按钮圆角；分段过滤的滑块是真的在动（shadcn 7px 圆角）', async () => {
     const info = await cdp.eval(`(() => {
-      // 注意：getComputedStyle 返回的是活对象，必须"焦点落在谁身上就立刻取值"，
-      // 否则第二个元素一聚焦，第一个的值就读成失焦后的了（这里踩过）
+      // 注意：getComputedStyle 返回活对象，必须"焦点落在谁身上就立刻取值"
       const read = (el) => {
         const cs = getComputedStyle(el);
         return { radius: parseFloat(cs.borderTopLeftRadius), outline: cs.outlineStyle, w: cs.outlineWidth, transition: cs.transitionProperty };
       };
       const chip = document.querySelector('.chip[data-filter="all"]');
-      chip.focus({ focusVisible: true });     // 强制进入 :focus-visible
+      const chipBefore = read(chip);
+      chip.focus({ focusVisible: true });
       const chipInfo = read(chip);
       const btn = document.querySelector('#checkAllBtn');
       btn.focus({ focusVisible: true });
       const btnInfo = read(btn);
       document.activeElement.blur();
-      return { chip: chipInfo, btn: btnInfo };
+      const thumb = document.querySelector('.filters-thumb');
+      const filters = document.querySelector('.filters');
+      const thumbCs = getComputedStyle(thumb);
+      return {
+        chip: chipInfo, chipBefore, btn: btnInfo,
+        thumb: {
+          transition: thumbCs.transitionProperty,
+          duration: parseFloat(thumbCs.transitionDuration),
+          w: getComputedStyle(filters).getPropertyValue('--thumb-w').trim(),
+          x: getComputedStyle(filters).getPropertyValue('--thumb-x').trim(),
+        },
+      };
     })()`);
-    assert(info.chip.radius >= 100, `chip 圆角被焦点样式改小了：${info.chip.radius}px（应为 999）`);
+    assert(info.chip.radius === info.chipBefore.radius, `焦点态改变了 chip 圆角：${info.chipBefore.radius} → ${info.chip.radius}`);
+    assert(info.chip.radius >= 6, `chip 圆角异常：${info.chip.radius}px`);
     assert(info.btn.radius >= 8, `按钮圆角异常：${info.btn.radius}px`);
     assert(info.chip.outline !== 'none' && info.btn.outline !== 'none', `键盘焦点看不到焦点环：chip=${info.chip.outline} btn=${info.btn.outline}`);
-    assert(info.chip.transition.includes('box-shadow'), `chip 过渡属性缺少 box-shadow：${info.chip.transition}`);
-    return `chip 圆角 ${info.chip.radius}px / 按钮 ${info.btn.radius}px，焦点环 ${info.chip.w} ${info.chip.outline}`;
+    assert(info.thumb.transition.includes('transform'), `滑块没有 transform 过渡：${info.thumb.transition}`);
+    assert(info.thumb.duration > 0, '滑块过渡时长应为正数');
+    assert(parseFloat(info.thumb.w) > 0, `滑块宽度没有测出来：${JSON.stringify(info.thumb)}`);
+    return `chip ${info.chip.radius}px / 按钮 ${info.btn.radius}px，滑块 ${info.thumb.w} @ ${info.thumb.x}`;
   });
 
   await check('表单校验：空输入提交会内联报错并设 aria-invalid（不会静默失败）', async () => {
@@ -244,6 +258,17 @@ try {
       return true;
     })()`);
     return '内联错误 + aria-invalid 生效';
+  });
+
+  await check('订阅表单：空链接会内联报错（不会静默失败）', async () => {
+    await cdp.eval('(() => { const i = document.querySelector("#subInput"); i.value = ""; document.querySelector("#subForm").requestSubmit(); return true; })()');
+    await sleep(220);
+    const info = await cdp.eval('(() => ({ invalid: document.querySelector("#subInput").getAttribute("aria-invalid"), hint: document.querySelector("#subHint").textContent, cls: document.querySelector("#subHint").className }))()');
+    assert(info.invalid === 'true', '没设 aria-invalid');
+    assert(/请先填/.test(info.hint), '提示文案不对：' + info.hint);
+    assert(info.cls.includes('is-error'), '提示没有进入错误态');
+    await cdp.eval('(() => { const i = document.querySelector("#subInput"); i.removeAttribute("aria-invalid"); const h = document.querySelector("#subHint"); h.className = "hint"; h.textContent = "额度来自订阅响应头 subscription-userinfo；链接只存在本机（服务端加密），界面只显示脱敏形式。"; return true; })()');
+    return '订阅表单内联错误 + aria-invalid 生效';
   });
 
   await check('接口去重：重复添加同一个项目返回 409 且界面给出提示', async () => {

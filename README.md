@@ -64,7 +64,7 @@ WebView 可以直接请求（已在 CI 里实测通过）；列表与基线存 l
 
 | 流水线 | 干什么 | 产出 |
 | --- | --- | --- |
-| `verify-web` | 纯逻辑单测（18 组）→ 起本机服务 → 无头 Chrome 真点每个按钮（26 项）+ 直连模式（9 项，含系统通知断言） | 截图与报告 artifact |
+| `verify-web` | 纯逻辑单测（24 组）→ 起本机服务 → 无头 Chrome 真点每个按钮（27 项）+ 直连模式（9 项，含系统通知断言） | 截图与报告 artifact |
 | `build-android` | Gradle 编译 debug/release APK → **校验 APK 里确实打进了网页资源** → 起安卓模拟器装上、启动、截图、查崩溃 | `android-apk` artifact |
 | `build-desktop` | Windows 上 electron-builder 打包；另起 Linux job 用 xvfb 真跑一遍 Electron 壳 | `desktop-windows` artifact（安装包 + 免安装版） |
 
@@ -157,6 +157,17 @@ GitHub 未认证的 API 额度是 **60 次/小时/IP**，界面右上角有实�
 
 ## 设计说明（三个 UI 技能各自的落点）
 
+### 2026-10 第二轮（1.2.0）：shadcn 中性主题 + 订阅额度
+
+- **配色换成 shadcn 默认气质**：中性 zinc 底 + 单一前景色主按钮；删掉绿色渐变 logo、彩色阴影和所有硬编码色。
+  状态色只用于状态（有新版本=绿、待记录=琥珀、失败=红），不再参与品牌表达。
+- **亮暗两套只靠 token**：`[data-theme="light"]` 覆盖同一组语义变量；`color-scheme` 同步，滚动条/原生控件跟着变。
+- **首帧前定主题**：`<head>` 里一段内联脚本读 localStorage 并写 `data-theme`，深色用户不再先看到白屏再切换（FOUC）。
+- **筛选器滑块**：四个 chip 宽度不同，用 `transform: translateX()` + 实测宽度做滑动指示块；
+  字体加载完成、窗口 resize、过滤计数变化都会重新测量（只量一次会错位）。
+- **节点订阅**：新增订阅导入（Clash YAML / base64 节点列表），展示**按订阅的**流量额度、到期时间、节点数与协议分布。
+  额度来自响应头 `subscription-userinfo`；没有该头就如实显示"额度未知"，不臆造。
+- **凭据保护**：订阅链接与 Token 走同一条 AES-256-GCM 落盘路径；界面只显示 `协议://主机/••••hash`。
 ### 2026-10 这一轮（1.1.0）改了什么
 
 - **卡片只留给项目本身**：添加区和工具栏原来是两张 `card.panel`，现在是同一条连续控制区，
@@ -213,9 +224,9 @@ github-watch/
 ## 自测
 
 ```bash
-npm test                                  # 纯逻辑：semver / 链接解析 / 转义 / 翻页 / 加密 / 基线状态机（18 组）
+npm test                                  # 纯逻辑：semver / 链接解析 / 转义 / 翻页 / 加密 / 订阅解析 / 基线状态机（24 组）
 node server.mjs                           # 另开一个窗口
-node tools/verify-ui.mjs http://127.0.0.1:7321/   # 26 项真点按钮
+node tools/verify-ui.mjs http://127.0.0.1:7321/   # 27 项真点按钮
 node tools/verify-direct.mjs              # 直连模式 9 项（含系统通知断言）
 ```
 
@@ -282,6 +293,28 @@ CI 构建日志里会打印实际 APK 的 `Signer #1 certificate SHA-256`，对�
 
 **版本号**：`versionName` 与 `versionCode` 现在从 `package.json` 推导（1.1.0 → 10100），
 不再写死 `1.0.0`/`1`——否则覆盖安装时系统可能把它当成同版本或降级。
+
+## 节点订阅与流量额度
+
+**它能回答什么**
+
+- 这个订阅还剩多少流量、什么时候到期（响应头 `subscription-userinfo`）。
+- 订阅里有多少节点、都是什么协议（Clash YAML 或 base64 节点列表）。
+- 拉取失败时如实报错；链接在错误信息里也会被脱敏。
+
+**它不能回答什么**
+
+- **每个节点各自的额度**：绝大多数机场只给整个订阅一个流量池，节点级配额基本不通过订阅接口暴露。
+  所以界面写的是"这个订阅已用 x / 总量 y"，不是"每个节点还剩多少"。
+- **节点是否可用/延迟**：这需要真实的 mihomo 外部控制器（`/proxies/{name}/delay`），本项目没有内置代理内核。
+  如果你在本机跑着 FlClash/mihomo，可以后续接 `127.0.0.1:9090` 做延迟测试；在此之前不做任何"节点健康"的假展示。
+
+**存储与边界**
+
+- 服务端/桌面：订阅记录写入 `data/repos.json`，其中 URL 是密文（与 Token 同一套密钥）。
+- 安卓直连模式：没有服务端，订阅 URL 存在 WebView 的 localStorage；且额度响应头需要机场设置
+  `Access-Control-Expose-Headers`，没有的话只能看到节点数、额度显示"未知"。
+- 拉取限制：只接受 http(s)、单次响应上限 2MB、复用现有传输退让链（fetch → curl 直连 → curl 代理）。
 
 ## 已知限制
 
