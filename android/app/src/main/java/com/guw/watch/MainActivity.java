@@ -200,10 +200,12 @@ public class MainActivity extends Activity {
                     out.put("text", text);
                     out.put("headers", headerOut);
                 } catch (Exception e) {
-                    out.put("status", 0);
-                    out.put("text", "");
-                    out.put("error", e.getClass().getSimpleName() + ": " + e.getMessage());
-                    out.put("headers", new JSONObject());
+                    try {
+                        out.put("status", 0);
+                        out.put("text", "");
+                        out.put("error", e.getClass().getSimpleName() + ": " + e.getMessage());
+                        out.put("headers", new JSONObject());
+                    } catch (Exception ignored) { }
                 }
                 final String payload = out.toString();
                 web.post(() -> web.evaluateJavascript(
@@ -242,7 +244,9 @@ public class MainActivity extends Activity {
                         out.put("error", "HTTP " + code);
                     }
                 } catch (Exception e) {
-                    out.put("error", e.getClass().getSimpleName() + ": " + e.getMessage());
+                    try {
+                        out.put("error", e.getClass().getSimpleName() + ": " + e.getMessage());
+                    } catch (Exception ignored) { }
                 }
                 final String payload = out.toString();
                 web.post(() -> web.evaluateJavascript(
