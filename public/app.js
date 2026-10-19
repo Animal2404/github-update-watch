@@ -9,7 +9,6 @@
 import { createMorph } from './vendor/morphicons/dom.js';
 import { icons } from './vendor/icons.js';
 import { createGithub, createStore, esc } from './github-core.js';
-import { nodeQuotaView } from './subs-core.js';
 
 // ---------------------------------------------------------------- 后端选择
 // 桌面版：页面由 server.mjs 提供，走 /api/*（Node 侧有 curl 代理退让链 + 磁盘存储）
@@ -176,7 +175,7 @@ function initAllIcons(root = document) {
 }
 
 // ---------------------------------------------------------------- 状态
-const state = { repos: [], subscriptions: [], filter: 'all', query: '', job: null, hasToken: false, rate: null, transport: null, lastRunAt: null, nodeQuotaMode: 'shared', nodeSort: 'quota-desc' };
+const state = { repos: [], subscriptions: [], filter: 'all', query: '', job: null, hasToken: false, rate: null, transport: null, lastRunAt: null, nodeSort: 'name' };
 const $ = (sel) => document.querySelector(sel);
 const grid = $('#grid');
 const emptyState = $('#emptyState');
@@ -570,7 +569,7 @@ var quotaTimer = null;
 async function refreshQuota() {
   try {
     var data = await backend.rate();
-    if (data && data.rate) { state.rate = data.rate; renderHeader(); renderQuotaRows(); }
+    if (data && data.rate) { state.rate = data.rate; renderHeader(); renderQuotaRows(); renderSubs(); }
   } catch { /* 保持旧值，界面会显示上次更新时间 */ }
 }
 
@@ -617,7 +616,6 @@ async function refresh({ quiet = false } = {}) {
     state.rate = data.rate || null;
     state.transport = data.transport || null;
     state.lastRunAt = data.lastRunAt || null;
-    state.nodeQuotaMode = data.nodeQuotaMode === 'estimate' ? 'estimate' : 'shared';
     renderGrid(); renderHeader(); renderJob(); renderSubs();
     return data;
   } catch (e) {
@@ -850,34 +848,25 @@ function fmtBytes(n) {
   return text + ' ' + units[i];
 }
 
-function nodeQuotaText(view) {
-  if (!view || view.source === 'unknown') return { text: '未知', pct: null, title: '机场没有返回流量信息' };
-  if (view.unlimited) return { text: '不限流量', pct: null, title: '订阅没有给总量（机场按不限量处理）' };
-  if (view.source === 'node') return { text: '剩 ' + fmtBytes(view.remaining) + ' / ' + fmtBytes(view.total), pct: view.percent, title: '机场在节点信息里提供的流量' };
-  if (view.source === 'estimate') return { text: '估算 · 剩 ' + fmtBytes(view.remaining), pct: view.percent, title: '整条订阅剩余流量 ÷ ' + view.share + ' 个节点（估算，不是机场按节点计量）' };
-  return { text: '共用 · 剩 ' + fmtBytes(view.remaining), pct: view.percent, title: '整条订阅共用一个流量池' };
+function apiRowInfo() {
+  var core = rateCore();
+  var rate = state.rate;
+  if (!core) return { text: '—', pct: null, reset: '', title: '还没有拿到 GitHub API 额度' };
+  var limit = core.limit == null ? '—' : core.limit;
+  var remaining = core.remaining == null ? '—' : core.remaining;
+  var pct = (core.limit && core.used != null) ? Math.min(100, Math.round((core.used / core.limit) * 1000) / 10) : 0;
+  var resetMs = core.reset ? core.reset * 1000 - quotaNow(rate) : null;
+  var reset = resetMs == null ? '' : (resetMs <= 0 ? '已到重置时间' : fmtCountdown(resetMs) + '后重置');
+  return { text: '剩 ' + remaining + ' / ' + limit, pct: pct, reset: reset, title: 'GitHub API 额度按账号/IP 计数，与代理节点无关；所有节点显示同一个值' };
 }
 
 function sortSubNodes(sub) {
-  var nodes = (sub.nodes && sub.nodes.nodes) || [];
-  var rows = nodes.map(function (node) {
-    return { node: node, view: nodeQuotaView(node, sub.quotaRaw, nodes.length, state.nodeQuotaMode) };
+  var nodes = ((sub.nodes && sub.nodes.nodes) || []).slice();
+  nodes.sort(function (a, b) {
+    if (state.nodeSort === 'protocol') return String(a.type || '').localeCompare(String(b.type || '')) || a.name.localeCompare(b.name, 'zh');
+    return a.name.localeCompare(b.name, 'zh');
   });
-  var cmp = {
-    'quota-desc': function (a, b) {
-      return (b.view.percent || 0) - (a.view.percent || 0) || (b.view.remaining || 0) - (a.view.remaining || 0) || a.node.name.localeCompare(b.node.name, 'zh');
-    },
-    'quota-asc': function (a, b) {
-      return (a.view.percent || 0) - (b.view.percent || 0) || (a.view.remaining || 0) - (b.view.remaining || 0) || a.node.name.localeCompare(b.node.name, 'zh');
-    },
-    'name': function (a, b) { return a.node.name.localeCompare(b.node.name, 'zh'); },
-    'protocol': function (a, b) { return String(a.node.type || '').localeCompare(String(b.node.type || '')) || a.node.name.localeCompare(b.node.name, 'zh'); },
-  }[state.nodeSort] || null;
-  var known = rows.filter(function (row) { return row.view.source !== 'unknown'; });
-  var unknown = rows.filter(function (row) { return row.view.source === 'unknown'; });
-  if (cmp) known.sort(cmp);
-  unknown.sort(function (a, b) { return a.node.name.localeCompare(b.node.name, 'zh'); });
-  return known.concat(unknown);
+  return nodes;
 }
 
 function subStatus(sub) {
@@ -926,25 +915,24 @@ function subCardHtml(sub) {
   html += '<span>更新 ' + fmtDate(sub.lastCheckedAt) + '</span></div>';
 
   var ranked = sortSubNodes(sub);
+  var api = apiRowInfo();
   if (ranked.length) {
     html += '<div class="node-table-wrap"><div class="node-scroll">';
-    html += '<table class="node-table"><caption class="sr-only">节点流量（只读）</caption>';
-    html += '<thead><tr><th scope="col">节点</th><th scope="col">流量</th></tr></thead><tbody>';
-    ranked.slice(0, 200).forEach(function (row) {
-      var q = nodeQuotaText(row.view);
-      var node = row.node;
+    html += '<table class="node-table"><caption class="sr-only">节点与 GitHub API 额度（只读）</caption>';
+    html += '<thead><tr><th scope="col">节点</th><th scope="col">GitHub API</th></tr></thead><tbody>';
+    ranked.slice(0, 200).forEach(function (node) {
       var where = node.server ? (node.server + (node.port ? ':' + node.port : '')) : '';
-      html += '<tr data-node="' + esc(node.name) + '" data-source="' + esc(row.view.source) + '">';
+      html += '<tr data-node="' + esc(node.name) + '">';
       html += '<td><div class="node-name"><b>' + esc(node.name) + '</b><span class="node-sub"><span class="proto">' + esc(node.type || '?') + '</span>' + esc(where) + '</span></div></td>';
-      html += '<td><div class="node-quota" data-source="' + esc(row.view.source) + '" title="' + esc(q.title) + '">';
-      html += '<div class="node-quota-line"><span>' + esc(q.text) + '</span>' + (q.pct == null ? '' : '<span class="src">' + q.pct + '%</span>') + '</div>';
-      if (q.pct != null) html += '<div class="node-bar"><span style="width:' + Math.max(0, Math.min(100, q.pct)) + '%"></span></div>';
+      html += '<td><div class="node-quota" data-source="api" title="' + esc(api.title) + '">';
+      html += '<div class="node-quota-line"><span>' + esc(api.text) + '</span>' + (api.pct == null ? '' : '<span class="src">' + api.pct + '%</span>') + '</div>';
+      if (api.pct != null) html += '<div class="node-bar"><span style="width:' + api.pct + '%"></span></div>';
+      if (api.reset) html += '<div class="node-reset">' + esc(api.reset) + '</div>';
       html += '</div></td></tr>';
     });
     html += '</tbody></table></div></div>';
-    html += '<p class="node-note">流量来源：<b>共用</b> = 整条订阅的流量池；<b>估算</b> = 剩余流量 ÷ 节点数。两者都不是机场按节点计量。</p>';
+    html += '<p class="node-note">这是 <b>GitHub API 请求额度</b>（按账号/IP，所有节点相同），与节点本身无关；订阅流量见卡片顶部。</p>';
   }
-  if (sub.error) html += '<div class="repo-error">' + esc(sub.error) + '</div>';
 
   html += '<div class="sub-actions">';
   html += '<button class="btn btn-sm btn-outline" type="button" data-sub-action="refresh">' + iconSvg('refresh-cw', 'icon icon-sm') + '<span>刷新</span></button>';
@@ -956,9 +944,7 @@ function subCardHtml(sub) {
 }
 
 function syncSubControls() {
-  var mode = $('#nodeQuotaMode');
   var sort = $('#nodeSort');
-  if (mode) mode.value = state.nodeQuotaMode;
   if (sort) sort.value = state.nodeSort;
 }
 
@@ -977,21 +963,8 @@ function renderSubs() {
   initAllIcons(list);
 }
 
-$('#nodeQuotaMode').addEventListener('change', async (ev) => {
-  var mode = ev.target.value === 'estimate' ? 'estimate' : 'shared';
-  try {
-    await backend.setNodeQuotaMode(mode);
-    state.nodeQuotaMode = mode;
-    renderSubs();
-    toast(mode === 'estimate' ? '已切换为均分估算（不是机场按节点计量）' : '已切换为整条订阅共用流量', 'info');
-  } catch (e) {
-    toast(e.message, 'error');
-    ev.target.value = state.nodeQuotaMode;
-  }
-});
-
 $('#nodeSort').addEventListener('change', (ev) => {
-  state.nodeSort = ev.target.value;
+  state.nodeSort = ev.target.value === 'protocol' ? 'protocol' : 'name';
   try { localStorage.setItem('guw-node-sort', state.nodeSort); } catch { /* 忽略 */ }
   renderSubs();
 });
@@ -1224,7 +1197,7 @@ async function renderUpdateBadge(force) {
 // ---------------------------------------------------------------- 启动
 (async function boot() {
   initAllIcons();
-  try { if (localStorage.getItem('guw-node-sort')) state.nodeSort = localStorage.getItem('guw-node-sort'); } catch { /* 忽略 */ }
+  try { var savedSort = localStorage.getItem('guw-node-sort'); if (savedSort === 'protocol') state.nodeSort = 'protocol'; } catch { /* 忽略 */ }
   applyTheme(localStorage.getItem('guw-theme') || 'dark');
   requestAnimationFrame(updateFilterThumb);
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(updateFilterThumb).catch(() => {});

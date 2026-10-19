@@ -97,16 +97,8 @@
         <h2 class="deck-title" id="subTitle">节点订阅</h2>
         <span class="muted-note" id="subSummary">导入机场订阅，查看订阅流量与节点</span>
         <div class="sub-controls">
-          <label class="inline-control">节点流量
-            <select class="select" id="nodeQuotaMode" aria-label="节点流量口径">
-              <option value="shared">共用（真实）</option>
-              <option value="estimate">均分（估算）</option>
-            </select>
-          </label>
           <label class="inline-control">排序
             <select class="select" id="nodeSort" aria-label="节点排序">
-              <option value="quota-desc">流量高→低</option>
-              <option value="quota-asc">流量低→高</option>
               <option value="name">名称</option>
               <option value="protocol">协议</option>
             </select>
@@ -125,7 +117,7 @@
         </div>
         <button class="btn btn-primary" id="subAddBtn" type="submit">导入</button>
       </form>
-      <p class="sub-purpose"><b>这个面板只做两件事</b>：读取订阅的总流量 / 到期时间，并统计节点数量。它不是代理客户端——选节点、测延迟、连线路请用 FlClash 或 mihomo。订阅流量只有机场在响应头 <code>subscription-userinfo</code> 里返回时才有。节点表会标出来源：<b>共用</b> = 整条订阅一个流量池（真实）；<b>估算</b> = 剩余流量 ÷ 节点数（本应用换算，不是机场按节点计量）；没有数据就显示“未知”。</p>
+      <p class="sub-purpose"><b>这个面板</b>：卡片顶部是订阅流量（机场返回的总量/到期）；节点表每一行显示当前 <b>GitHub API 额度</b>（剩余/上限、重置倒计时）。API 额度按账号/IP 计数，与代理节点无关，所以所有行是同一个值；选节点、测延迟请用 FlClash / mihomo。</p>
       <p class="hint" id="subHint">链接只存在本机（桌面端加密落盘），界面只显示脱敏形式。</p>
       <div id="subList" class="sub-list"></div>
     </section>

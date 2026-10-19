@@ -530,7 +530,8 @@ dialog::backdrop { background: var(--overlay); }
 .node-quota-line .src { color: var(--foreground); font-weight: 600; }
 .node-bar { height: 4px; border-radius: 999px; background: color-mix(in srgb, var(--foreground) 9%, transparent); overflow: hidden; }
 .node-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--foreground); }
-.node-quota[data-source="shared"] .node-bar > span { background: var(--muted-foreground); }
+.node-quota[data-source="api"] .node-bar > span { background: var(--foreground); }
+.node-reset { font-size: .64rem; color: var(--muted-foreground); }
 .node-quota[data-source="estimate"] .node-bar > span { background: color-mix(in srgb, var(--muted-foreground) 55%, var(--foreground)); }
 .node-note { margin: .45rem .1rem .1rem; font-size: .68rem; line-height: 1.45; color: var(--muted-foreground); }
 .node-note b { color: var(--foreground); font-weight: 600; }
