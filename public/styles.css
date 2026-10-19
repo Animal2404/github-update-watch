@@ -94,7 +94,9 @@ body {
   font-size: 15px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-  transition: background-color .2s ease, color .2s ease;
+  /* 主题切换不再用分层颜色过渡：sticky header 和不透明卡片没法保证同帧同步，
+     中途会出现"黑头 + 灰身"的直角块。改用 View Transitions 的圆形揭示；
+     不支持时直接原子切换。 */
 }
 h1, h2, h3, h4, p { margin: 0; }
 h1, h3 { text-wrap: balance; }
@@ -556,6 +558,20 @@ dialog::backdrop { background: var(--overlay); }
 @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin 1s linear infinite; }
+
+/* 主题切换：从按钮扩散的圆形揭示，避免整页快照露出直角 */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+::view-transition-new(root) {
+  animation: theme-reveal .38s var(--ease-out) both;
+}
+@keyframes theme-reveal {
+  from { clip-path: circle(0 at var(--theme-x, 50%) var(--theme-y, 50%)); }
+  to { clip-path: circle(150vmax at var(--theme-x, 50%) var(--theme-y, 50%)); }
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }

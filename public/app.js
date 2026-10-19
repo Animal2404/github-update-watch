@@ -770,17 +770,28 @@ $('#searchInput').addEventListener('input', (ev) => {
 });
 
 // ---------------------------------------------------------------- 交互：主题
-function applyTheme(theme) {
-  document.documentElement.dataset.theme = theme;
-  localStorage.setItem('guw-theme', theme);
-  try { window.AndroidTheme && window.AndroidTheme.setTheme(theme); } catch { /* 非安卓环境 */ }
-  const themeMeta = document.querySelector('meta[name="theme-color"]');
-  if (themeMeta) themeMeta.setAttribute('content', theme === 'light' ? '#ffffff' : '#09090b');
-  morph($('#themeBtn').querySelector('svg'), theme === 'dark' ? 'moon' : 'sun');
-  requestAnimationFrame(updateFilterThumb);
+function applyTheme(theme, { animate = false } = {}) {
+  const commit = () => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem('guw-theme', theme);
+    try { window.AndroidTheme && window.AndroidTheme.setTheme(theme); } catch { /* 非安卓环境 */ }
+    const themeMeta = document.querySelector('meta[name="theme-color"]');
+    if (themeMeta) themeMeta.setAttribute('content', theme === 'light' ? '#ffffff' : '#09090b');
+    morph($('#themeBtn').querySelector('svg'), theme === 'dark' ? 'moon' : 'sun');
+    requestAnimationFrame(updateFilterThumb);
+  };
+  // View Transitions 的根快照默认是方形；用圆形 clip 从主题按钮扩散。
+  // 不支持（旧 WebView）或 prefers-reduced-motion 时直接切，绝不留过渡中途的直角块。
+  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!animate || reduce || typeof document.startViewTransition !== 'function') { commit(); return; }
+  const rect = $('#themeBtn').getBoundingClientRect();
+  document.documentElement.style.setProperty('--theme-x', (rect.left + rect.width / 2) + 'px');
+  document.documentElement.style.setProperty('--theme-y', (rect.top + rect.height / 2) + 'px');
+  try { document.startViewTransition(commit); }
+  catch { commit(); }
 }
 $('#themeBtn').addEventListener('click', () => {
-  applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+  applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark', { animate: true });
 });
 
 // ---------------------------------------------------------------- 交互：设置对话框
